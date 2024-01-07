@@ -1,8 +1,7 @@
-
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2018 Matic Kukovec. 
+Copyright (c) 2013-2023 Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -17,47 +16,32 @@ import keyword
 import builtins
 import re
 import functions
+import qt
 import data
 import time
 import lexers
+#import lexers.treesittermake
+#import lexers.treesitterpython
 
 def set_font(lexer, style_name, style_options):
-    font, color, size, bold = style_options
-    try:
-        style_index = lexer.styles[style_name]["index"]
-    except:
-        style_index = lexer.styles[style_name]
+    style_index = lexer.styles[style_name]
     lexer.setColor(
-        data.QColor(color),
+        qt.QColor(style_options["color"]),
         style_index
     )
-    weight = data.QFont.Normal
-    if bold == 1 or bold == True:
-        weight = data.QFont.Bold
-    elif bold == 2:
-        weight = data.QFont.Black
+    weight = qt.QFont.Weight.Normal
+    if style_options["bold"]:
+        weight = qt.QFont.Weight.Bold
+#    elif bold == 2:
+#        weight = qt.QFont.Weight.Black
     lexer.setFont(
-        data.QFont(font, size, weight=weight), 
+        qt.QFont(
+            data.current_editor_font_name,
+            data.current_editor_font_size,
+            weight=weight
+        ),
         style_index
     )
-
-def set_font_new(lexer, style_name, style_options):
-    font, color, size, bold = style_options
-    style_index = lexer.styles[style_name]["index"]
-    lexer.setColor(
-        data.QColor(color),
-        style_index
-    )
-    weight = data.QFont.Normal
-    if bold == 1 or bold == True:
-        weight = data.QFont.Bold
-    elif bold == 2:
-        weight = data.QFont.Black
-    lexer.setFont(
-        data.QFont(font, size, weight=weight), 
-        style_index
-    )
-
 
 def get_lexer_from_file_type(file_type):
     current_file_type = file_type
@@ -67,12 +51,15 @@ def get_lexer_from_file_type(file_type):
             lexer = lexers.CustomPython()
         else:
             lexer = lexers.Python()
+#        lexer = lexers.treesitterpython.TreeSitterPython("Python", "python")
     elif file_type == "cython":
         lexer = lexers.Cython()
     elif file_type == "c":
         lexer = lexers.CPP()
     elif file_type == "c++":
         lexer = lexers.CPP()
+    elif file_type == "cmake":
+        lexer = lexers.CMake()
     elif file_type == "pascal":
         lexer = lexers.Pascal()
     elif file_type == "oberon/modula":
@@ -85,6 +72,7 @@ def get_lexer_from_file_type(file_type):
         lexer = lexers.Nim()
     elif file_type == "makefile":
         lexer = lexers.Makefile()
+#        lexer = lexers.treesittermake.TreeSitterMakefile("Make", "make")
     elif file_type == "xml":
         lexer = lexers.XML()
     elif file_type == "batch":
@@ -93,11 +81,6 @@ def get_lexer_from_file_type(file_type):
         lexer = lexers.Bash()
     elif file_type == "lua":
         lexer = lexers.Lua()
-    elif file_type == "coffeescript":
-        if data.compatibility_mode == False:
-            lexer = lexers.CoffeeScript()
-        else:
-            lexer = lexers.Text()
     elif file_type == "c#":
         lexer = lexers.CPP()
     elif file_type == "java":
@@ -112,6 +95,8 @@ def get_lexer_from_file_type(file_type):
         lexer = lexers.SQL()
     elif file_type == "postscript":
         lexer = lexers.PostScript()
+    elif file_type == "php":
+        lexer = lexers.Php()
     elif file_type == "fortran":
         lexer = lexers.Fortran()
     elif file_type == "fortran77":
@@ -128,6 +113,14 @@ def get_lexer_from_file_type(file_type):
         lexer = lexers.AWK()
     elif file_type == "cicode":
         lexer = lexers.CiCode()
+    elif file_type == "spice":
+        lexer = lexers.Spice()
+    elif file_type == "skill":
+        lexer = lexers.SKILL()
+    elif file_type == "smallbasic":
+        lexer = lexers.SmallBasic()
+    elif file_type == "yaml":
+        lexer = lexers.YAML()
     else:
         #No lexer was chosen, set file type to text and lexer to plain text
         current_file_type = "TEXT"
@@ -172,8 +165,6 @@ def get_comment_style_for_lexer(lexer):
         comment_string = "#"
     elif isinstance(lexer, lexers.Lua):
         comment_string = "--"
-    elif data.compatibility_mode == False and isinstance(lexer, lexers.CoffeeScript):
-        comment_string = "#"
     elif isinstance(lexer, lexers.Java):
         comment_string = "//"
     elif isinstance(lexer, lexers.JavaScript):
@@ -184,6 +175,12 @@ def get_comment_style_for_lexer(lexer):
         comment_string = "#"
     elif isinstance(lexer, lexers.SQL):
         comment_string = "#"
+    elif isinstance(lexer, lexers.Spice):
+        comment_string = "*"
+    elif isinstance(lexer, lexers.SKILL):
+        comment_string = ";"
+    elif isinstance(lexer, lexers.SmallBasic):
+        comment_string = "'"
     elif isinstance(lexer, lexers.PostScript):
         comment_string = "%"
     elif isinstance(lexer, lexers.Fortran):

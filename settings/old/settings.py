@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2018 Matic Kukovec. 
+Copyright (c) 2013-2023 Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -18,8 +18,8 @@ import os.path
 import runpy
 import json
 import pprint
-import data
-import themes
+from . import data
+from . import themes
 import functions
 import traceback
 
@@ -38,10 +38,7 @@ class Editor:
     # Default EOL style in editors (EolWindows-CRLF, EolUnix-LF, EolMac-CR)
     end_of_line_mode = data.QsciScintilla.EolUnix
     # Font colors and styles
-    font = data.QFont(
-        data.current_editor_font_name,
-        data.current_editor_font_size
-    )
+    font = data.get_current_font()
     brace_color = data.QColor(255, 153, 0)
     comment_font = data.current_editor_font_name.encode("utf-8")
     # Edge marker
@@ -681,4 +678,17 @@ class SettingsFileManipulator:
         groups.sort(key=sort_groups_func)
         return groups
 
-
+def parse_settings_file(settings_filename_with_path):
+    lines = []
+    # Import the init file as a python module
+    init_module = runpy.run_path(
+        settings_filename_with_path,
+        init_globals = {"themes": themes, "data": data}
+    )
+    return {
+        "main_window_side": init_module["main_window_side"],
+        "theme": init_module["theme"],
+        "recent_files": init_module["recent_files"],
+        "sessions": init_module["sessions"],
+        "context_menu_functions": init_module["context_menu_functions"]
+    }

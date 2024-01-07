@@ -1,32 +1,23 @@
-
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2019 Matic Kukovec. 
+Copyright (c) 2013-2023 Matic Kukovec.
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
-import os
-import sip
-import os.path
-import collections
-import traceback
-import ast
 import inspect
-import math
 import functools
-import textwrap
 import difflib
-import re
-import time
 import settings
 import functions
+import qt
 import data
-import components
-import themes
+import constants
+import components.actionfilter
+import components.internals
 
 from .customeditor import *
 
@@ -35,33 +26,33 @@ from .customeditor import *
 Object for displaying text difference between two files
 ----------------------------------------------------------------------------
 """
-class TextDiffer(data.QWidget):
+class TextDiffer(qt.QWidget):
     """A widget that holds two PlainEditors for displaying text difference"""
     #Class variables
     _parent                 = None
     main_form               = None
     name                    = ""
-    savable                 = data.CanSave.NO
+    savable                 = constants.CanSave.NO
     current_icon            = None
-    icon_manipulator        = None
+    internals        = None
     focused_editor          = None
     text_1                  = None
     text_2                  = None
     text_1_name             = None
     text_2_name             = None
     #Class constants
-    DEFAULT_FONT            = data.QFont(data.current_font_name, data.current_font_size)
-    MARGIN_STYLE            = data.QsciScintilla.STYLE_LINENUMBER
+    DEFAULT_FONT            = qt.QFont(data.current_font_name, data.current_font_size)
+    MARGIN_STYLE            = qt.QsciScintilla.STYLE_LINENUMBER
     INDICATOR_UNIQUE_1          = 1
-    Indicator_Unique_1_Color    = data.QColor(0x72, 0x9f, 0xcf, 80)
+    Indicator_Unique_1_Color    = qt.QColor(0x72, 0x9f, 0xcf, 80)
     INDICATOR_UNIQUE_2          = 2
-    Indicator_Unique_2_Color    = data.QColor(0xad, 0x7f, 0xa8, 80)
+    Indicator_Unique_2_Color    = qt.QColor(0xad, 0x7f, 0xa8, 80)
     INDICATOR_SIMILAR           = 3
-    Indicator_Similar_Color     = data.QColor(0x8a, 0xe2, 0x34, 80)
-    GET_X_OFFSET    = data.QsciScintillaBase.SCI_GETXOFFSET
-    SET_X_OFFSET    = data.QsciScintillaBase.SCI_SETXOFFSET
-    UPDATE_H_SCROLL = data.QsciScintillaBase.SC_UPDATE_H_SCROLL
-    UPDATE_V_SCROLL = data.QsciScintillaBase.SC_UPDATE_V_SCROLL
+    Indicator_Similar_Color     = qt.QColor(0x8a, 0xe2, 0x34, 80)
+    GET_X_OFFSET    = qt.QsciScintillaBase.SCI_GETXOFFSET
+    SET_X_OFFSET    = qt.QsciScintillaBase.SCI_SETXOFFSET
+    UPDATE_H_SCROLL = qt.QsciScintillaBase.SC_UPDATE_H_SCROLL
+    UPDATE_V_SCROLL = qt.QsciScintillaBase.SC_UPDATE_V_SCROLL
     #Diff icons
     icon_unique_1   = None
     icon_unique_2   = None
@@ -80,51 +71,54 @@ class TextDiffer(data.QWidget):
     editor_1    = None
     editor_2    = None
     layout      = None
-    
-        
-    def clean_up(self):
-        self.editor_1.mousePressEvent = None
-        self.editor_1.wheelEvent = None
-        self.editor_2.mousePressEvent = None
-        self.editor_2.wheelEvent = None
-        self.editor_1.actual_parent = None
-        self.editor_2.actual_parent = None
-        self.editor_1.clean_up()
-        self.editor_2.clean_up()
-        self.editor_1 = None
-        self.editor_2 = None
-        self.focused_editor = None
-        self.splitter.setParent(None)
-        self.splitter = None
-        self.layout = None
-        self._parent = None
-        self.main_form = None
-        self.icon_manipulator = None
-        # Clean up self
-        self.setParent(None)
-        self.deleteLater()
-        """
-        The actual clean up will occur when the next garbage collection
-        cycle is executed, probably because of the nested functions and 
-        the focus decorator.
-        """
-    
-    def __init__(self, 
-                 parent, 
-                 main_form, 
-                 text_1=None, 
-                 text_2=None, 
-                 text_1_name="", 
+
+
+    def __del__(self):
+        try:
+            self.editor_1.mousePressEvent = None
+            self.editor_1.wheelEvent = None
+            self.editor_2.mousePressEvent = None
+            self.editor_2.wheelEvent = None
+            self.editor_1.actual_parent = None
+            self.editor_2.actual_parent = None
+            self.editor_1.__del__()
+            self.editor_2.__del__()
+            self.editor_1 = None
+            self.editor_2 = None
+            self.focused_editor = None
+            self.splitter.setParent(None)
+            self.splitter = None
+            self.layout = None
+            self._parent = None
+            self.main_form = None
+            self.internals = None
+            # Clean up self
+            self.setParent(None)
+            self.deleteLater()
+            """
+            The actual clean up will occur when the next garbage collection
+            cycle is executed, probably because of the nested functions and
+            the focus decorator.
+            """
+        except:
+            pass
+
+    def __init__(self,
+                 parent,
+                 main_form,
+                 text_1=None,
+                 text_2=None,
+                 text_1_name="",
                  text_2_name=""):
         """Initialization"""
         # Initialize the superclass
         super().__init__(parent)
         # Initialize components
-        self.icon_manipulator = components.IconManipulator(self, parent)
+        self.internals = components.internals.Internals(self, parent)
         # Initialize colors according to theme
-        self.Indicator_Unique_1_Color = data.theme.TextDifferColors.Indicator_Unique_1_Color
-        self.Indicator_Unique_2_Color = data.theme.TextDifferColors.Indicator_Unique_2_Color
-        self.Indicator_Similar_Color = data.theme.TextDifferColors.Indicator_Similar_Color
+        self.Indicator_Unique_1_Color = qt.QColor(data.theme["textdiffercolors"]["indicator-unique-1-color"])
+        self.Indicator_Unique_2_Color = qt.QColor(data.theme["textdiffercolors"]["indicator-unique-2-color"])
+        self.Indicator_Similar_Color = qt.QColor(data.theme["textdiffercolors"]["indicator-similar-color"])
         # Store the reference to the parent
         self._parent = parent
         # Store the reference to the main form
@@ -145,7 +139,7 @@ class TextDiffer(data.QWidget):
         self.icon_unique_2  = functions.create_icon("tango_icons/diff-unique-2.png")
         self.icon_similar   = functions.create_icon("tango_icons/diff-similar.png")
         # Create the horizontal splitter and two editor widgets
-        self.splitter = data.QSplitter(data.Qt.Horizontal, self)
+        self.splitter = qt.QSplitter(qt.Qt.Orientation.Horizontal, self)
         self.editor_1 = CustomEditor(self, main_form)
         self.init_editor(self.editor_1)
         self.editor_2 = CustomEditor(self, main_form)
@@ -154,7 +148,7 @@ class TextDiffer(data.QWidget):
         self.editor_2.choose_lexer("text")
         self.splitter.addWidget(self.editor_1)
         self.splitter.addWidget(self.editor_2)
-        self.layout = data.QVBoxLayout()
+        self.layout = qt.QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(self.splitter)
         # Set the layout
@@ -213,7 +207,7 @@ class TextDiffer(data.QWidget):
             return
         # Create the diff
         self.compare(text_1, text_2)
-    
+
     def _scn_updateui_1(self, sc_update):
         """Function connected to the SCN_UPDATEUI signal for scroll detection"""
         if self.focused_editor == self.editor_1:
@@ -224,7 +218,7 @@ class TextDiffer(data.QWidget):
             elif sc_update == self.UPDATE_V_SCROLL:
                 current_top_line = self.editor_1.firstVisibleLine()
                 self.editor_2.setFirstVisibleLine(current_top_line)
-    
+
     def _scn_updateui_2(self, sc_update):
         """Function connected to the SCN_UPDATEUI signal for scroll detection"""
         if self.focused_editor == self.editor_2:
@@ -235,7 +229,7 @@ class TextDiffer(data.QWidget):
             elif sc_update == self.UPDATE_V_SCROLL:
                 current_top_line = self.editor_2.firstVisibleLine()
                 self.editor_1.setFirstVisibleLine(current_top_line)
-    
+
     def _cursor_change_1(self, line, index):
         """
         Function connected to the cursorPositionChanged signal for
@@ -252,7 +246,7 @@ class TextDiffer(data.QWidget):
             #Update the first visible line, so that the views in both differs match
             current_top_line = self.editor_1.firstVisibleLine()
             self.editor_2.setFirstVisibleLine(current_top_line)
-    
+
     def _cursor_change_2(self, line, index):
         """
         Function connected to the cursorPositionChanged signal for
@@ -269,16 +263,16 @@ class TextDiffer(data.QWidget):
             #Update the first visible line, so that the views in both differs match
             current_top_line = self.editor_2.firstVisibleLine()
             self.editor_1.setFirstVisibleLine(current_top_line)
-    
+
     def _update_margins(self):
         """Update the text margin width"""
         self.editor_1.setMarginWidth(0, "0" * len(str(self.editor_1.lines())))
         self.editor_2.setMarginWidth(0, "0" * len(str(self.editor_2.lines())))
-    
+
     def _signal_editor_cursor_change(self, cursor_line=None, cursor_column=None):
         """Signal that fires when cursor position changes in one of the editors"""
         self.main_form.display.update_cursor_position(cursor_line, cursor_column)
-    
+
     def _init_editor_functions(self):
         """
         Initialize the editor functions that are called on the TextDiffer widget,
@@ -293,16 +287,16 @@ class TextDiffer(data.QWidget):
         #Unimplemented functions
         def uniplemented_function(*args, **kwargs):
             self.main_form.display.repl_display_message(
-                "Function '{:s}' is not implemented by the TextDiffer!".format(args[0]), 
-                message_type=data.MessageType.ERROR
+                "Function '{:s}' is not implemented by the TextDiffer!".format(args[0]),
+                message_type=constants.MessageType.ERROR
             )
         all_editor_functions = inspect.getmembers(
-            CustomEditor, 
+            CustomEditor,
             predicate=inspect.isfunction
         )
         skip_functions = [
             "set_theme",
-            "clean_up",
+            "__del__",
         ]
         enabled_functions = [
             "find_text",
@@ -329,8 +323,8 @@ class TextDiffer(data.QWidget):
             if function[0] in enabled_functions:
                 #Find text is enabled
                 setattr(
-                    self, 
-                    function[0], 
+                    self,
+                    function[0],
                     functools.partial(enabled_function, function[0])
                 )
             elif function[0] in disabled_functions:
@@ -340,11 +334,11 @@ class TextDiffer(data.QWidget):
             else:
                 #Unimplemented functions should display an error message
                 setattr(
-                    self, 
-                    function[0], 
+                    self,
+                    function[0],
                     functools.partial(uniplemented_function, function[0])
                 )
-        
+
     def mousePressEvent(self, event):
         """Overloaded mouse click event"""
         #Execute the superclass mouse click event
@@ -353,12 +347,11 @@ class TextDiffer(data.QWidget):
         self.setFocus()
         #Set the last focused widget to the parent basic widget
         self.main_form.last_focused_widget = self._parent
-        data.print_log("Stored \"{:s}\" as last focused widget".format(self._parent.name))
         #Hide the function wheel if it is shown
         self.main_form.view.hide_all_overlay_widgets()
         # Reset the click&drag context menu action
         components.ActionFilter.clear_action()
-    
+
     def setFocus(self):
         """Overridden focus event"""
         #Execute the superclass focus function
@@ -367,34 +360,34 @@ class TextDiffer(data.QWidget):
         self.main_form.view.indication_check()
         #Focus the last focused editor
         self.focused_editor.setFocus()
-    
-    def init_margin(self, 
-                    editor, 
-                    marker_unique, 
-                    marker_unique_symbol, 
-                    marker_similar, 
+
+    def init_margin(self,
+                    editor,
+                    marker_unique,
+                    marker_unique_symbol,
+                    marker_similar,
                     marker_similar_symbol):
         """Initialize margin for coloring lines showing diff symbols"""
         editor.setMarginWidth(0, "0")
         #Setting the margin width to 0 makes the marker colour the entire line
         #to the marker background color
         editor.setMarginWidth(1, "00")
-        editor.setMarginWidth(2, 0)        
-        editor.setMarginType(0, data.QsciScintilla.TextMargin)
-        editor.setMarginType(1, data.QsciScintilla.SymbolMargin)
-        editor.setMarginType(2, data.QsciScintilla.SymbolMargin)
-        #I DON'T KNOW THE ENTIRE LOGIC BEHIND MARKERS AND MARGINS! If you set 
+        editor.setMarginWidth(2, 0)
+        editor.setMarginType(0, qt.QsciScintilla.MarginType.TextMargin)
+        editor.setMarginType(1, qt.QsciScintilla.MarginType.SymbolMargin)
+        editor.setMarginType(2, qt.QsciScintilla.MarginType.SymbolMargin)
+        #I DON'T KNOW THE ENTIRE LOGIC BEHIND MARKERS AND MARGINS! If you set
         #something wrong in the margin mask, the markers on a different margin don't appear!
         #http://www.scintilla.org/ScintillaDoc.html#SCI_SETMARGINMASKN
         editor.setMarginMarkerMask(
             1,
-            ~data.QsciScintillaBase.SC_MASK_FOLDERS 
+            ~qt.QsciScintillaBase.SC_MASK_FOLDERS
         )
         editor.setMarginMarkerMask(
-            2, 
+            2,
             0x0
         )
-    
+
     def init_markers(self):
         """Initialize all markers for showing diff symbols"""
         #Set the images
@@ -407,104 +400,106 @@ class TextDiffer(data.QWidget):
         image_unique_2  = image_unique_2.scaled(image_scale_size)
         image_similar   = image_similar.scaled(image_scale_size)
         #Markers for editor 1
-        self.marker_unique_1            = self.editor_1.markerDefine(data.QsciScintillaBase.SC_MARK_BACKGROUND, 0)
+        self.marker_unique_1            = self.editor_1.markerDefine(qt.QsciScintilla.MarkerSymbol.Background, 0)
         self.marker_unique_symbol_1     = self.editor_1.markerDefine(image_unique_1, 1)
-        self.marker_similar_1           = self.editor_1.markerDefine(data.QsciScintillaBase.SC_MARK_BACKGROUND, 2)
+        self.marker_similar_1           = self.editor_1.markerDefine(qt.QsciScintilla.MarkerSymbol.Background, 2)
         self.marker_similar_symbol_1    = self.editor_1.markerDefine(image_similar, 3)
         #Set background colors only for the background markers
         self.editor_1.setMarkerBackgroundColor(self.Indicator_Unique_1_Color, self.marker_unique_1)
         self.editor_1.setMarkerBackgroundColor(self.Indicator_Similar_Color, self.marker_similar_1)
         #Margins for editor 1
         self.init_margin(
-            self.editor_1, 
-            self.marker_unique_1, 
-            self.marker_unique_symbol_1, 
-            self.marker_similar_1, 
+            self.editor_1,
+            self.marker_unique_1,
+            self.marker_unique_symbol_1,
+            self.marker_similar_1,
             self.marker_similar_symbol_1
         )
         #Markers for editor 2
-        self.marker_unique_2            = self.editor_2.markerDefine(data.QsciScintillaBase.SC_MARK_BACKGROUND, 0)
+        self.marker_unique_2            = self.editor_2.markerDefine(qt.QsciScintilla.MarkerSymbol.Background, 0)
         self.marker_unique_symbol_2     = self.editor_2.markerDefine(image_unique_2, 1)
-        self.marker_similar_2           = self.editor_2.markerDefine(data.QsciScintillaBase.SC_MARK_BACKGROUND, 2)
+        self.marker_similar_2           = self.editor_2.markerDefine(qt.QsciScintilla.MarkerSymbol.Background, 2)
         self.marker_similar_symbol_2    = self.editor_2.markerDefine(image_similar, 3)
         #Set background colors only for the background markers
         self.editor_2.setMarkerBackgroundColor(self.Indicator_Unique_2_Color, self.marker_unique_2)
         self.editor_2.setMarkerBackgroundColor(self.Indicator_Similar_Color, self.marker_similar_2)
         #Margins for editor 2
         self.init_margin(
-            self.editor_2, 
-            self.marker_unique_2, 
-            self.marker_unique_symbol_2, 
-            self.marker_similar_2, 
+            self.editor_2,
+            self.marker_unique_2,
+            self.marker_unique_symbol_2,
+            self.marker_similar_2,
             self.marker_similar_symbol_2
         )
-    
+
     def init_indicator(self,
-                       editor, 
-                       indicator, 
+                       editor,
+                       indicator,
                        color):
-        """Set the indicator settings"""
+        """
+        Set the indicator settings
+        """
         editor.indicatorDefine(
-            data.QsciScintillaBase.INDIC_ROUNDBOX,
+            qt.QsciScintillaBase.INDIC_ROUNDBOX,
             indicator
         )
         editor.setIndicatorForegroundColor(
-            color, 
+            color,
             indicator
         )
         editor.SendScintilla(
-            data.QsciScintillaBase.SCI_SETINDICATORCURRENT, 
+            qt.QsciScintillaBase.SCI_SETINDICATORCURRENT,
             indicator
         )
-    
+
     def init_editor(self, editor):
         """Initialize all of the PlainEditor settings for difference displaying"""
         editor.setLexer(None)
         editor.setUtf8(True)
         editor.setIndentationsUseTabs(False)
         editor.setFont(self.DEFAULT_FONT)
-        editor.setBraceMatching(data.QsciScintilla.SloppyBraceMatch)
-        editor.setMatchedBraceBackgroundColor(data.QColor(255, 153, 0))
+        editor.setBraceMatching(qt.QsciScintilla.BraceMatch.SloppyBraceMatch)
+        editor.setMatchedBraceBackgroundColor(qt.QColor(255, 153, 0))
         editor.setAcceptDrops(False)
-        editor.setEolMode(settings.Editor.end_of_line_mode)
+        editor.setEolMode(qt.QsciScintilla.EolMode(settings.editor['end_of_line_mode']))
         editor.setReadOnly(True)
-        editor.savable = data.CanSave.NO
-    
+        editor.savable = constants.CanSave.NO
+
     def set_margin_text(self, editor, line, text):
         """Set the editor's margin text at the selected line"""
         editor.setMarginText(line, text, self.MARGIN_STYLE)
-    
+
     def set_line_indicator(self, editor, line, indicator_index):
         """Set the editor's selected line color"""
         #Set the indicator
         if indicator_index == self.INDICATOR_UNIQUE_1:
             self.init_indicator(
-                editor, 
-                self.INDICATOR_UNIQUE_1, 
+                editor,
+                self.INDICATOR_UNIQUE_1,
                 self.Indicator_Unique_1_Color
             )
         elif indicator_index == self.INDICATOR_UNIQUE_2:
             self.init_indicator(
-                editor, 
-                self.INDICATOR_UNIQUE_2, 
+                editor,
+                self.INDICATOR_UNIQUE_2,
                 self.Indicator_Unique_2_Color
             )
         elif indicator_index == self.INDICATOR_SIMILAR:
             self.init_indicator(
-                editor, 
-                self.INDICATOR_SIMILAR, 
+                editor,
+                self.INDICATOR_SIMILAR,
                 self.Indicator_Similar_Color
             )
         #Color the line background
-        scintilla_command = data.QsciScintillaBase.SCI_INDICATORFILLRANGE
+        scintilla_command = qt.QsciScintillaBase.SCI_INDICATORFILLRANGE
         start   = editor.positionFromLineIndex(line, 0)
         length  = editor.lineLength(line)
         editor.SendScintilla(
-            scintilla_command, 
-            start, 
+            scintilla_command,
+            start,
             length
         )
-    
+
     def compare(self, text_1, text_2):
         """
         Compare two text strings and display the difference
@@ -580,7 +575,7 @@ class TextDiffer(data.QWidget):
                             + ...
                             ? ...
                         """
-                        #Lines have only a few character difference, skip the 
+                        #Lines have only a few character difference, skip the
                         #first '?' and handle the next '?' as a "'- '/'+ '/'? '" sequence
                         pass
                     elif list_sum[i-1].startswith("- "):
@@ -592,7 +587,7 @@ class TextDiffer(data.QWidget):
                             + ...
                         """
                         line_styling_1[len(line_numbering_1) - 1] = self.INDICATOR_SIMILAR
-                        
+
                         list_2.pop()
                         line_numbering_2.pop()
                         line_styling_2.pop()
@@ -609,7 +604,7 @@ class TextDiffer(data.QWidget):
                         line_numbering_1.pop()
                         line_styling_1.pop()
                         line_styling_1[len(line_numbering_1) - 1] = self.INDICATOR_SIMILAR
-                        
+
                         pop_index_2 = (len(line_numbering_2) - 1) - 1
                         list_2.pop(pop_index_2)
                         line_numbering_2.pop(pop_index_2)
@@ -645,8 +640,8 @@ class TextDiffer(data.QWidget):
         #Check if there were any differences
         if (any(line_styling_1) == False and any(line_styling_2) == False):
             self.main_form.display.repl_display_message(
-                "No differences between texts.", 
-                message_type=data.MessageType.SUCCESS
+                "No differences between texts.",
+                message_type=constants.MessageType.SUCCESS
             )
         else:
             #Count the number of differences
@@ -669,19 +664,19 @@ class TextDiffer(data.QWidget):
                         difference_counter_2 += 1
             #Display the differences/similarities messages
             self.main_form.display.repl_display_message(
-                "{:d} differences found in '{:s}'!".format(difference_counter_1, self.text_1_name), 
-                message_type=data.MessageType.DIFF_UNIQUE_1
+                "{:d} differences found in '{:s}'!".format(difference_counter_1, self.text_1_name),
+                message_type=constants.MessageType.DIFF_UNIQUE_1
             )
             self.main_form.display.repl_display_message(
-                "{:d} differences found in '{:s}'!".format(difference_counter_2, self.text_2_name), 
-                message_type=data.MessageType.DIFF_UNIQUE_2
+                "{:d} differences found in '{:s}'!".format(difference_counter_2, self.text_2_name),
+                message_type=constants.MessageType.DIFF_UNIQUE_2
             )
             self.main_form.display.repl_display_message(
-                "{:d} similarities found between documents!".format(similarity_counter, self.text_2_name), 
-                message_type=data.MessageType.DIFF_SIMILAR
+                "{:d} similarities found between documents!".format(similarity_counter, self.text_2_name),
+                message_type=constants.MessageType.DIFF_SIMILAR
             )
         self._update_margins()
-    
+
     def find_next_unique_1(self):
         """Find and scroll to the first unique 1 difference"""
         self.focused_editor         = self.editor_1
@@ -694,13 +689,13 @@ class TextDiffer(data.QWidget):
         #Check if we are back at the start of the document
         if next_unique_diff_line == 0:
             self.main_form.display.repl_display_message(
-                "Scrolled back to the start of the document!", 
-                message_type=data.MessageType.DIFF_UNIQUE_1
+                "Scrolled back to the start of the document!",
+                message_type=constants.MessageType.DIFF_UNIQUE_1
             )
             self.main_form.display.write_to_statusbar(
                 "Scrolled back to the start of the document!"
             )
-    
+
     def find_next_unique_2(self):
         """Find and scroll to the first unique 2 difference"""
         self.focused_editor         = self.editor_2
@@ -713,13 +708,13 @@ class TextDiffer(data.QWidget):
         #Check if we are back at the start of the document
         if next_unique_diff_line == 0:
             self.main_form.display.repl_display_message(
-                "Scrolled back to the start of the document!", 
-                message_type=data.MessageType.DIFF_UNIQUE_2
+                "Scrolled back to the start of the document!",
+                message_type=constants.MessageType.DIFF_UNIQUE_2
             )
             self.main_form.display.write_to_statusbar(
                 "Scrolled back to the start of the document!"
             )
-    
+
     def find_next_similar(self):
         """Find and scroll to the first similar line"""
         self.focused_editor         = self.editor_1
@@ -732,65 +727,62 @@ class TextDiffer(data.QWidget):
         #Check if we are back at the start of the document
         if next_unique_diff_line == 0:
             self.main_form.display.repl_display_message(
-                "Scrolled back to the start of the document!", 
-                message_type=data.MessageType.DIFF_SIMILAR
+                "Scrolled back to the start of the document!",
+                message_type=constants.MessageType.DIFF_SIMILAR
             )
             self.main_form.display.write_to_statusbar(
                 "Scrolled back to the start of the document!"
             )
-    
+
     def add_corner_buttons(self):
         # Unique 1 button
-        self.icon_manipulator.add_corner_button(
-            functions.create_icon("tango_icons/diff-unique-1.png"), 
+        self.internals.add_corner_button(
+            functions.create_icon("tango_icons/diff-unique-1.png"),
             "Scroll to next unique line\nin document: '{:s}'".format(
                 self.text_1_name
             ),
             self.find_next_unique_1
         )
         # Unique 2 button
-        self.icon_manipulator.add_corner_button(
-            functions.create_icon("tango_icons/diff-unique-2.png"), 
+        self.internals.add_corner_button(
+            functions.create_icon("tango_icons/diff-unique-2.png"),
             "Scroll to next unique line\nin document: '{:s}'".format(
                 self.text_2_name
             ),
             self.find_next_unique_2
         )
         # Similar button
-        self.icon_manipulator.add_corner_button(
-            functions.create_icon("tango_icons/diff-similar.png"), 
+        self.internals.add_corner_button(
+            functions.create_icon("tango_icons/diff-similar.png"),
             "Scroll to next similar line\nin both documents",
             self.find_next_similar
         )
-    
+
     def set_theme(self, theme):
         def set_editor_theme(editor):
-            if theme == themes.Air:
+            if theme["name"] == "Air":
                 editor.resetFoldMarginColors()
-            elif theme == themes.Earth:
+            elif theme["name"] == "Earth":
                 editor.setFoldMarginColors(
-                    theme.FoldMargin.ForeGround, 
-                    theme.FoldMargin.BackGround
+                    qt.QColor(theme["foldmargin"]["foreground"]),
+                    qt.QColor(theme["foldmargin"]["background"])
                 )
-            editor.setMarginsForegroundColor(theme.LineMargin.ForeGround)
-            editor.setMarginsBackgroundColor(theme.LineMargin.BackGround)
+            editor.setMarginsForegroundColor(qt.QColor(theme["linemargin"]["foreground"]))
+            editor.setMarginsBackgroundColor(qt.QColor(theme["linemargin"]["background"]))
             editor.SendScintilla(
-                data.QsciScintillaBase.SCI_STYLESETBACK, 
-                data.QsciScintillaBase.STYLE_DEFAULT, 
-                theme.Paper.Default
+                qt.QsciScintillaBase.SCI_STYLESETBACK,
+                qt.QsciScintillaBase.STYLE_DEFAULT,
+                qt.QColor(theme["fonts"]["default"]["color"])
             )
             editor.SendScintilla(
-                data.QsciScintillaBase.SCI_STYLESETBACK, 
-                data.QsciScintillaBase.STYLE_LINENUMBER, 
-                theme.LineMargin.BackGround
+                qt.QsciScintillaBase.SCI_STYLESETBACK,
+                qt.QsciScintillaBase.STYLE_LINENUMBER,
+                qt.QColor(theme["linemargin"]["background"])
             )
             editor.SendScintilla(
-                data.QsciScintillaBase.SCI_SETCARETFORE, 
-                theme.Cursor
+                qt.QsciScintillaBase.SCI_SETCARETFORE,
+                qt.QColor(theme["cursor"])
             )
             editor.choose_lexer("text")
         set_editor_theme(self.editor_1)
         set_editor_theme(self.editor_2)
-
-
-

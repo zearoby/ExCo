@@ -2,20 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2019 Matic Kukovec. 
+Copyright (c) 2013-2023 Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
-import data
-import functions
-import gui
 import re
 import math
 import typing
-import sip
+import importlib
+
+import data
+import functions
 
 
 class IconManipulator:
@@ -29,6 +29,11 @@ class IconManipulator:
     def __init__(self, parent=None, tab_widget=None):
         self._parent = parent
         self._tab_widget = tab_widget
+        
+        self.__module_customeditor = importlib.import_module("gui.customeditor")
+        self.__module_plaineditor = importlib.import_module("gui.plaineditor")
+        self.__module_tabwidget = importlib.import_module("gui.tabwidget")
+        self.__module_textdiffer = importlib.import_module("gui.textdiffer")
     
     def __del__(self):
         self.remove_corner_groupbox()
@@ -50,20 +55,20 @@ class IconManipulator:
         parent basic widget
         """
         tab_widget = self._tab_widget
-        if isinstance(obj, gui.CustomEditor):
-            if isinstance(tab_widget, gui.TabWidget):
+        if isinstance(obj, self.__module_customeditor.CustomEditor):
+            if isinstance(tab_widget, self.__module_tabwidget.TabWidget):
                 tab_widget.update_tab_icon(obj)
                 self.update_corner_widget(obj)
-            elif isinstance(tab_widget, gui.TextDiffer):
+            elif isinstance(tab_widget, self.__module_textdiffer.TextDiffer):
                 tab_widget._parent.update_tab_icon(obj)
-        elif isinstance(obj, gui.PlainEditor):
-            if isinstance(tab_widget, gui.TabWidget):
+        elif isinstance(obj, self.__module_plaineditor.PlainEditor):
+            if isinstance(tab_widget, self.__module_tabwidget.TabWidget):
                 tab_widget.update_tab_icon(obj)
-        elif hasattr(obj, "_parent") and obj.current_icon != None:
+        elif hasattr(obj, "_parent") and obj.current_icon is not None:
             obj._parent.update_tab_icon(obj)
     
     def update_corner_widget(self, obj):
-        if self.corner_groupbox != None:
+        if self.corner_groupbox is not None:
             tab_widget = self._tab_widget
             self.show_corner_groupbox(tab_widget)
             return True
@@ -71,11 +76,9 @@ class IconManipulator:
             return False
     
     def remove_corner_groupbox(self):
-        if self.corner_groupbox == None:
+        if self.corner_groupbox is None:
             return
-        if not sip.isdeleted(self.corner_groupbox):
-            self.corner_groupbox.setParent(None)
-            self.corner_groupbox.deleteLater()
+        self.corner_groupbox = None
     
     def create_corner_button(self, icon, tooltip, function):
         button = data.QToolButton()
@@ -83,14 +86,14 @@ class IconManipulator:
             button.setIcon(icon)
         else:
             button.setIcon(functions.create_icon(icon))
-        button.setPopupMode(data.QToolButton.InstantPopup)
+        button.setPopupMode(data.QToolButton.ToolButtonPopupMode.InstantPopup)
         button.setToolTip(tooltip)
         button.clicked.connect(function)
         return button
     
     def add_corner_button(self, icon, tooltip, function):
         # Create the group box for buttons if needed
-        if self.corner_groupbox == None:
+        if self.corner_groupbox is None:
             self.corner_groupbox = data.QGroupBox(self._tab_widget)
             corner_layout = data.QHBoxLayout()
             corner_layout.setSpacing(0)
@@ -103,7 +106,7 @@ class IconManipulator:
         layout = self.corner_groupbox.layout()
         layout.addWidget(button)
         for i in range(layout.count()):
-            if data.custom_menu_scale != None:
+            if data.custom_menu_scale is not None:
                 layout.itemAt(i).widget().setIconSize(
                     data.QSize(
                         data.custom_menu_scale, 
@@ -112,11 +115,11 @@ class IconManipulator:
                 )
     
     def restyle_corner_button_icons(self):
-        if self.corner_groupbox == None:
+        if self.corner_groupbox is None:
             return
         layout = self.corner_groupbox.layout()
         for i in range(layout.count()):
-            if data.custom_menu_scale != None:
+            if data.custom_menu_scale is not None:
                 layout.itemAt(i).widget().setIconSize(
                     data.QSize(
                         data.custom_menu_scale, 
@@ -125,7 +128,7 @@ class IconManipulator:
                 )
     
     def update_corner_button_icon(self, icon, index=0):
-        if self.corner_groupbox == None:
+        if self.corner_groupbox is None:
             return
         layout = self.corner_groupbox.layout()
         if isinstance(icon, data.QIcon):
@@ -136,10 +139,13 @@ class IconManipulator:
             )
     
     def show_corner_groupbox(self, tab_widget):
-        if self.corner_groupbox == None:
+        if self.corner_groupbox is None:
             return
-        tab_widget.setCornerWidget(self.corner_groupbox)
-        self.corner_groupbox.show()
-        self.corner_groupbox.setStyleSheet(
-            "QGroupBox {border: 0px;}"
-        )
+        try:
+            tab_widget.setCornerWidget(self.corner_groupbox)
+            self.corner_groupbox.show()
+            self.corner_groupbox.setStyleSheet(
+                "QGroupBox {border: 0px;}"
+            )
+        except:
+            pass

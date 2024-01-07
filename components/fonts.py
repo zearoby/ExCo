@@ -10,40 +10,48 @@ import sys
 import traceback
 import functools
 import textwrap
-import functions
-import data
 
-def get_fonts_from_resources():
-    directory = functions.unixify_path_join(data.resources_directory, "fonts/")
+import qt
+import data
+import functions
+
+def __get_fonts_from_resources():
+    directory = functions.unixify_join(data.resources_directory, "fonts/")
     font_file_list = []
     for root, dirs, files in os.walk(directory):
         for file in files:
-            item = functions.unixify_path_join(root, file)
+            item = functions.unixify_join(root, file)
             if item.lower().endswith('.ttf') or item.lower().endswith('.otf'):
                 font_file_list.append(
-                    functions.unixify_path_join(directory, item)
+                    functions.unixify_join(directory, item)
                 )
     return font_file_list
 
 def set_application_font(name, size):
-    # Load the fonts
-    font_file_list = get_fonts_from_resources()
+    name = data.current_font_name
+    # Load the fonts from 'resources/fonts'
+    font_file_list = __get_fonts_from_resources()
     for file in font_file_list:
-        data.QFontDatabase.addApplicationFont(file)
-    # Check if the font is available
-    fdb = data.QFontDatabase()
+        qt.QFontDatabase.addApplicationFont(file)
+
+    # Check if font is properly loaded
+    search_font_name = name.lower()
     font_found = False
-    for f in fdb.families():
-        if name.lower() in f.lower():
-            font_found = True
-            name = f
-            break
+    if qt.PYQT_MODE < 6:
+        for fontname in qt.QFontDatabase().families(): # noqa
+            if search_font_name in fontname.lower():
+                font_found = True
+                break
+    else:
+        # The QFontDatabase class has now only static member functions. The constructor has been
+        # deprecated.
+        for fontname in qt.QFontDatabase.families():
+            if search_font_name in fontname.lower():
+                font_found = True
+                break
     if not font_found:
-        raise ValueError(
-            "Font '{}' is not installed on the system!".format(name)
-        )
+        raise Exception("[Fonts] Could not find correct font!")
+
     # Apply the font for the whole application
-    font = data.QFont(name, size)
-    data.current_font_name = name
-    data.current_font_size = size
+    font = data.get_current_font()
     data.application.setFont(font)

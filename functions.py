@@ -1,8 +1,7 @@
-
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2021 Matic Kukovec.
+Copyright (c) 2013-2023 Matic Kukovec.
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -15,51 +14,79 @@ For complete license information of the dependencies, check the 'additional_lice
 
 import os
 import os.path
-import locale
 import re
 import ast
+import json
+import time
 import codecs
-import itertools
-import operator
+import locale
 import timeit
-import data
+import operator
+import itertools
+import threading
 import traceback
 import subprocess
+import webbrowser
+
+import qt
+import data
+import constants
 
 # REPL message displaying function (that needs to be assigned at runtime!)
 repl_print = None
 
-def count_iterator(start):
+def write_json_file(filepath, json_data):
+    with open(filepath, 'w+', encoding='utf-8', newline='\n') as f:
+        f.write(json.dumps(json_data, indent=2, ensure_ascii=False))
+        f.close()
+
+def load_json_file(filepath):
+    with open(filepath, 'r', encoding='utf-8', newline='\n') as f:
+        json_data = json.load(f)
+        f.close()
+    return json_data
+
+def count_iterator(start=0):
     counter = start
     while True:
-        yield str(counter)
+        yield counter
         counter += 1
 
 def create_directory(directory):
     if not os.path.isdir(directory):
         os.mkdir(directory)
 
+def create_thread(func, *args):
+    t = threading.Thread(target=func, args=args)
+    t.daemon = True
+    t.start()
+
 icon_cache = {}
-def create_icon(icon_name):
+def create_icon(icon):
     """
     Function for initializing and returning an QIcon object
     """
     global icon_cache
-    full_icon_path = unixify_path_join(
-        data.resources_directory,
-        icon_name
-    )
-    if full_icon_path in icon_cache.keys():
-        cached_icon = icon_cache[full_icon_path]
-        return data.QIcon(cached_icon)
-    if not os.path.isfile(full_icon_path):
-        raise Exception("Icon file doesn't exist: {}".format(full_icon_path))
-    new_icon = data.QIcon(full_icon_path)
-    icon_cache[full_icon_path] = new_icon
+    # Pixmap
+    if isinstance(icon, qt.QPixmap):
+        new_icon = qt.QIcon(icon)
+    # Path
+    elif isinstance(icon, str):
+        full_icon_path = unixify_join(data.resources_directory, icon)
+        if full_icon_path in icon_cache.keys():
+            cached_icon = icon_cache[full_icon_path]
+            return qt.QIcon(cached_icon)
+        if not os.path.isfile(full_icon_path):
+            raise Exception("Icon file doesn't exist: {}".format(full_icon_path))
+        new_icon = qt.QIcon(full_icon_path)
+        icon_cache[full_icon_path] = new_icon
+    # Unknown
+    else:
+        raise Exception("Unknown icon construction type: {}".format(icon))
     return new_icon
 
 def get_resource_file(relative_path):
-    path = unixify_path_join(data.resources_directory, relative_path)
+    path = unixify_join(data.resources_directory, relative_path)
     if not os.path.isfile(path):
         raise Exception("[Resources] File does not exist: {}".format(path))
     return path
@@ -72,13 +99,13 @@ def create_pixmap(pixmap_name, directory=None):
     global pixmap_cache
     if directory == None:
         directory = data.resources_directory
-    pixmap_path = unixify_path_join(directory, pixmap_name)
+    pixmap_path = unixify_join(directory, pixmap_name)
     if pixmap_path in pixmap_cache.keys():
         cached_pixmap = pixmap_cache[pixmap_path]
-        return data.QPixmap(cached_pixmap)
+        return qt.QPixmap(cached_pixmap)
     if not os.path.isfile(pixmap_path):
         raise Exception("Pixmap file doesn't exist: {}".format(pixmap_path))
-    new_pixmap = data.QPixmap(pixmap_path)
+    new_pixmap = qt.QPixmap(pixmap_path)
     pixmap_cache[pixmap_path] = new_pixmap
     return new_pixmap
 
@@ -88,10 +115,34 @@ def create_pixmap_with_size(pixmap_name, width=None, height=None):
     """
     pixmap = create_pixmap(pixmap_name)
     if width:
-        pixmap = pixmap.scaledToWidth(width, data.Qt.SmoothTransformation)
+        pixmap = pixmap.scaledToWidth(
+            int(width), qt.Qt.TransformationMode.SmoothTransformation
+        )
     if height:
-        pixmap = pixmap.scaledToHeight(height, data.Qt.SmoothTransformation)
+        pixmap = pixmap.scaledToHeight(
+            int(height), qt.Qt.TransformationMode.SmoothTransformation
+        )
     return pixmap
+
+__overlay_cache = {}
+def ovarlay_images(base_path, overlay_path):
+    base_pixmap = create_pixmap(base_path)
+    if base_pixmap.isNull():
+        raise Exception(f"Cannot create base pixmap: {base_path}")
+    
+    overlay_pixmap = create_pixmap(overlay_path)
+    if overlay_pixmap.isNull():
+        raise Exception(f"Cannot create base pixmap: {overlay_path}")
+    
+    if overlay_pixmap.size().width() > base_pixmap.size().width() or overlay_pixmap.size().height() > base_pixmap.size().height():
+        overlay_pixmap = overlay_pixmap.scaled(base_pixmap.size(), qt.Qt.AspectRatioMode.KeepAspectRatio)
+    
+    painter = qt.QPainter()
+    painter.begin(base_pixmap)
+    painter.drawPixmap(0, 0, overlay_pixmap)
+    painter.end()
+    
+    return base_pixmap
 
 def get_language_file_icon(language_name):
     """
@@ -170,6 +221,8 @@ def get_language_file_icon(language_name):
         return create_icon('language_icons/logo_postscript.png')
     elif language_name  == "routeros":
         return create_icon('language_icons/logo_routeros.png')
+    elif language_name  == "spice":
+        return create_icon('language_icons/logo_spice.png')
     elif language_name  == "sql":
         return create_icon('language_icons/logo_sql.png')
     elif language_name  == "verilog":
@@ -267,10 +320,12 @@ def find_files_with_text_enum(search_text,
     """
     # Check if the directory is valid
     if os.path.isdir(search_dir) == False:
-        return -1
+        return "Invalid directory!"
     # Check if searching over multiple lines
     elif '\n' in search_text:
-        return -2
+        return "Cannot search over multiple lines!"
+    elif search_text == '':
+        return "Cannot search for empty string!"
     #Create an empty file list
     text_file_list = []
     #Check if subdirectories should be included
@@ -377,7 +432,7 @@ def replace_text_in_files_enum(search_text,
     # Check if searching over multiple lines
     elif '\n' in search_text:
         return -2
-    #Get the files with the search string in them
+    # Get the files with the search string in them
     found_files = find_files_with_text(
         search_text, 
         search_dir, 
@@ -388,17 +443,17 @@ def replace_text_in_files_enum(search_text,
     )
     if found_files == None:
         return {}
-    #Compile the regex expression according to case sensitivity
+    # Compile the regex expression according to case sensitivity
     if case_sensitive == True:
         compiled_search_re = re.compile(search_text)
     else:
         compiled_search_re = re.compile(search_text, re.IGNORECASE)
-    #Loop through the found list and replace the text
+    # Loop through the found list and replace the text
     return_files = {}
     for file in found_files:
-        #Read the file
+        # Read the file
         file_text_list = read_file_to_list(file)
-        #Cycle through the lines, replacing text and storing the line numbers of replacements
+        # Cycle through the lines, replacing text and storing the line numbers of replacements
         for i in range(len(file_text_list)):
             if case_sensitive == True:
                 line = file_text_list[i]
@@ -411,10 +466,10 @@ def replace_text_in_files_enum(search_text,
                 else:
                     return_files[file] = [i]
                 file_text_list[i] = re.sub(compiled_search_re, replace_text, file_text_list[i])
-        #Write the replaced text back to the file
+        # Write the replaced text back to the file
         replaced_text = "\n".join(file_text_list)
         write_to_file(replaced_text, file)
-    #Return the found files list
+    # Return the found files list
     return return_files
     
 
@@ -1151,12 +1206,16 @@ def get_python_node_tree(python_code):
                         new_node.children.append(result)
             new_node.children = sorted(new_node.children, key=lambda x: x.name)
         elif isinstance(ast_node, ast.Import):
-            new_node = PythonNode(
-                ast_node.names[0].name, 
-                "import", 
-                ast_node.lineno, 
-                level
-            )
+            new_nodes = []
+            for imp in ast_node.names:
+                new_node = PythonNode(
+                    imp.name, 
+                    "import",
+                    ast_node.lineno, 
+                    level
+                )
+                new_nodes.append(new_node)
+            return new_nodes
         elif isinstance(ast_node, ast.Assign) and (level == 0 or parent_node == None):
             # Globals that do are not defined with the 'global' keyword,
             # but are defined on the top level
@@ -1421,7 +1480,7 @@ def get_c_function_list(c_code):
     #Return the function list
     return function_list
 
-def get_node_tree_with_ctags(c_code, parser):
+def get_node_tree_with_ctags(code, parser):
     # Node object
     class CNode:
         def __init__(self, 
@@ -1514,9 +1573,14 @@ def get_node_tree_with_ctags(c_code, parser):
                     "try executing 'sudo apt-get install exuberant-ctags' to install Exuberant-Ctags."
                 )
     # Create the file for parsing
-    filename = "temporary_ctags_file.c"
+    filename = "temporary_ctags_file"
+    replace_word = "/\\/"
+    if parser == "JSON":
+        filtered_code = code.replace('.', replace_word)
+    else:
+        filtered_code = code
     with open(filename, "w+") as f:
-        f.write(c_code)
+        f.write(filtered_code)
         f.close()
     # Parse the file with ctags
     try:
@@ -1558,12 +1622,33 @@ def get_node_tree_with_ctags(c_code, parser):
                 "--excmd=number",
                 "--language-force=Pascal",
             )
+        elif parser == "PHP":
+            flags = (
+                "-R",
+                "--fields=-f-k-t+K+n",
+                "--excmd=number",
+                "--language-force=Php",
+            )
         elif parser == "JAVASCRIPT":
             flags = (
                 "-R",
                 "--fields=-f-k-t+K+n",
                 "--excmd=number",
                 "--language-force=Javascript",
+            )
+        elif parser == "MAKEFILE":
+            flags = (
+                "-R",
+                "--fields=-f-k-t+K+n",
+                "--excmd=number",
+                "--language-force=Make",
+            )
+        elif parser == "HTML":
+            flags = (
+                "-R",
+                "--fields=-f-k-t+K+n",
+                "--excmd=number",
+                "--language-force=HTML",
             )
         else:
             raise Exception(
@@ -1578,6 +1663,7 @@ def get_node_tree_with_ctags(c_code, parser):
                 [
                     ctags_program, 
                     *flags,
+                    "--output-format=json",
                     filename,
                 ], 
                 stdout=subprocess.PIPE,
@@ -1589,27 +1675,19 @@ def get_node_tree_with_ctags(c_code, parser):
                 [
                     ctags_program, 
                     *flags,
+                    "--output-format=json",
                     filename
                 ], 
                 stdout=subprocess.PIPE,
                 shell=False
             ).communicate()[0]
         output_utf = output.decode("utf-8")
+#        with open("D:/ctags.out.json", 'w+', encoding="utf-8") as f:
+#            lines = f.write(output_utf)
+#            f.close()
     except Exception as ex:
         repl_print(ex)
         raise Exception("Parse error!")
-    # Read the tag file
-    lines = []
-    try:
-        tag_filename = "tags"
-        with open(tag_filename, 'r') as f:
-            lines = f.readlines()
-            f.close()
-        # Delete the tag file
-        os.remove(tag_filename)
-    except Exception as ex:
-        repl_print(ex)
-        raise Exception("Tag file parse error!")
     # Initialize state variables
     main_node = CNode("module", "", 0, -1)
     main_node_list = []
@@ -1621,24 +1699,33 @@ def get_node_tree_with_ctags(c_code, parser):
         else:
             main_node_list.append(in_node)
     main_node = CNode("module", "", 0, -1)
-    # Parse the output
-    for line in lines:
-        if line.startswith("!_TAG"):
+
+    # Parse the output (NEW)
+    for line in output_utf.split('\n'):
+        # Parse JSON
+        if line.strip() == '':
             continue
-        split_line = line.split('\t')
-        if len(split_line) == 5:
-            name, file, ex_data, typ, line_number = split_line
-            line_number = int(line_number.split(':')[1])
-            add_node(
-                CNode(name, typ, line_number, 0, in_parent=None)
-            )
-        elif len(split_line) == 6:
-            name, file, ex_data, typ, line_number, parent = split_line
-            line_number = int(line_number.split(':')[1])
-            parent_type, parent_name = parent.split(':')
-            add_node(
-                CNode(name, typ, line_number, 0, in_parent=(parent_type, parent_name))
-            )
+        try:
+            json_data = json.loads(line)
+        except:
+            traceback.print_exc()
+            continue
+        # Skip non-tag items
+        if json_data["_type"] != "tag":
+            continue
+        
+        name = json_data["name"]
+        line_number = json_data["line"]
+        kind = json_data["kind"]
+        parent = None
+        if "scope" in json_data.keys():
+            parent_name = json_data["scope"]
+            parent_type = json_data["scopeKind"]
+            parent = (parent_type, parent_name)
+        add_node(
+            CNode(name, kind, line_number, 0, in_parent=parent)
+        )
+    
     # Delete the temporary parsing file
     os.remove(filename)
     # Sort the nodes alphabetically
@@ -2127,94 +2214,37 @@ def test_binary_file(file_with_path):
 
 def get_file_type(file_with_path, check_content=True):
     """Get file extension and return file type as string"""
-    #Initialize it as unknown and change it in the if statement 
+    # Initialize it as unknown and change it in the if statement 
     file_type = "unknown"   
-    #Split the file and path
+    # Split the file and path
     path, file = os.path.split(file_with_path)
-    #Split file name and extension
+    # Split file name and extension
     file_name, file_extension   = os.path.splitext(file)
-    if (file.lower() == data.config_file or
+    if (file_with_path.lower() == data.config_file.lower() or
         file.lower() == "exco.ini"):
-        #First check to see if the user functions file has been opened
+        # First check to see if the user functions file has been opened
         file_type = "python"
-    elif file_extension.lower() in data.ext_python:
-        file_type = "python"
-    elif file_extension.lower() in data.ext_cython:
-        file_type = "cython"
-    elif file_extension.lower() in data.ext_c:
-        file_type = "c"
-    elif file_extension.lower() in data.ext_cpp:
-        file_type = "c++"
-    elif file_extension.lower() in data.ext_pascal:
-        file_type = "pascal"
-    elif file_extension.lower() in data.ext_oberon:
-        file_type = "oberon/modula"
-    elif file_extension.lower() in data.ext_ada:
-        file_type = "ada"
-    elif file_extension.lower() in data.ext_awk:
-        file_type = "awk"
-    elif file_extension.lower() in data.ext_cicode:
-        file_type = "cicode"
-    elif file_extension.lower() in data.ext_xml:
-        file_type = "xml"
-    elif file_extension.lower() in data.ext_d:
-        file_type = "d"
-    elif file_extension.lower() in data.ext_nim:
-        file_type = "nim"
-    elif file_extension.lower() in data.ext_json:
-        file_type = "json"
-    elif file_extension.lower() in data.ext_perl:
-        file_type = "perl"
-    elif file_extension.lower() in data.ext_ini:
-        file_type = "ini"
-    elif file_extension.lower() in data.ext_batch:
-        file_type = "batch"
-    elif file_extension.lower() in data.ext_bash:
-        file_type = "bash"
     elif file_name.lower() == "makefile":
         file_type = "makefile"
-    elif file_extension.lower() in data.ext_lua:
-        file_type = "lua"
-    elif file_extension.lower() in data.ext_coffeescript:
-        file_type = "coffeescript"
-    elif file_extension.lower() in data.ext_csharp:
-        file_type = "c#"
-    elif file_extension.lower() in data.ext_java:
-        file_type = "java"
-    elif file_extension.lower() in data.ext_javascript:
-        file_type = "javascript"
-    elif file_extension.lower() in data.ext_octave:
-        file_type = "octave"
-    elif file_extension.lower() in data.ext_routeros:
-        file_type = "routeros"
-    elif file_extension.lower() in data.ext_sql:
-        file_type = "sql"
-    elif file_extension.lower() in data.ext_postscript:
-        file_type = "postscript"
-    elif file_extension.lower() in data.ext_fortran:
-        file_type = "fortran"
-    elif file_extension.lower() in data.ext_fortran77:
-        file_type = "fortran77"
-    elif file_extension.lower() in data.ext_idl:
-        file_type = "idl"
-    elif file_extension.lower() in data.ext_ruby:
-        file_type = "ruby"
-    elif file_extension.lower() in data.ext_html:
-        file_type = "html"
-    elif file_extension.lower() in data.ext_css:
-        file_type = "css"
+    elif "cmakelists" in file_name.lower():
+        file_type = "cmake"
     else:
-        if check_content == True:
-            #The file extension was not recognized, 
-            #try the file contents for more information
-            file_type = test_file_content_for_type(file_with_path)
-            #If the file content did not give any useful information,
-            #set the content as text
-            if file_type == "unknown":
-                file_type = "text"
+        for k,v in data.supported_file_extentions.items():
+            if file_extension.lower() in v:
+                file_type = k
+                break
         else:
-            file_type = "text"
-    #Return file type string
+            if check_content == True:
+                # The file extension was not recognized, 
+                # try the file contents for more information
+                file_type = test_file_content_for_type(file_with_path)
+                # If the file content did not give any useful information,
+                # set the content as text
+                if file_type == "unknown":
+                    file_type = "text"
+            else:
+                file_type = "text"
+    # Return file type string
     return file_type
 
 def test_file_content_for_type(file_with_path):
@@ -2236,6 +2266,8 @@ def test_file_content_for_type(file_with_path):
         #Check the line content
         if "<?xml" in first_line:
             file_type = "xml"
+        elif "<?php" in first_line:
+            file_type = "php"
         elif "#!" in first_line and "python" in first_line:
             file_type = "python"
         elif "#!" in first_line and "perl" in first_line:
@@ -2608,7 +2640,7 @@ def create_default_config_file():
         data.application_directory, data.config_file
     )
     with open(user_definitions_file, "w") as f:
-        f.write(data.default_config_file_content)
+        f.write(constants.default_config_file_content)
         f.close()
 
 def right_replace(string, search_str, replace_str, occurrence=1):
@@ -2632,32 +2664,32 @@ def get_line_indentation(line):
 def unixify_path(path):
     return os.path.realpath(path).replace("\\", "/")
 
-def unixify_path_join(*paths):
+def unixify_join(*paths):
     return unixify_path(os.path.join(*paths))
 
-def unixify_path_remove(whole_path, path_to_remove):
+def unixify_remove(whole_path, path_to_remove):
     return unixify_path(os.path.relpath(whole_path, path_to_remove))
 
 def change_icon_opacity(qicon, opacity):
     pixmap = qicon.pixmap(qicon.actualSize(create_size(256, 256)))
     pixmap = change_opacity(pixmap, opacity)
-    return data.QIcon(pixmap)
+    return qt.QIcon(pixmap)
 
 def change_opacity(pixmap_or_file, opacity):
     """
     Changes the opacity of a pixmap or image from a file
     """
-    base_image = data.QImage(pixmap_or_file)
-    image = data.QImage(
+    base_image = qt.QImage(pixmap_or_file)
+    image = qt.QImage(
         base_image.size(),
-        data.QImage.Format_ARGB32_Premultiplied
+        qt.QImage.Format.Format_ARGB32_Premultiplied
     )
-    image.fill(data.Qt.transparent)    
-    painter = data.QPainter(image)
+    image.fill(qt.Qt.GlobalColor.transparent)    
+    painter = qt.QPainter(image)
     painter.setRenderHints(
-        data.QPainter.Antialiasing | 
-        data.QPainter.TextAntialiasing | 
-        data.QPainter.SmoothPixmapTransform
+        qt.QPainter.RenderHint.Antialiasing | 
+        qt.QPainter.RenderHint.TextAntialiasing | 
+        qt.QPainter.RenderHint.SmoothPixmapTransform
     )
     painter.setOpacity(opacity)
     painter.drawImage(
@@ -2665,7 +2697,7 @@ def change_opacity(pixmap_or_file, opacity):
         base_image
     )
     painter.end()
-    pixmap = data.QPixmap.fromImage(image)
+    pixmap = qt.QPixmap.fromImage(image)
     return pixmap
 
 def get_index(start):
@@ -2680,10 +2712,10 @@ Constructor helper functions
 def create_rect(*args):
     if len(args) == 4:
         x, y, width, height = args
-        return data.QRect(int(x), int(y), int(width), int(height))
+        return qt.QRect(int(x), int(y), int(width), int(height))
     elif len(args) == 2:
         point, size = args
-        return data.QRect(point, size)
+        return qt.QRect(point, size)
     else:
         raise Exception(
             "[functions.create_rect] Unknown arguments: {}".format(args)
@@ -2692,9 +2724,9 @@ def create_rect(*args):
 def create_point(*args):
     if len(args) == 2:
         x, y = args
-        return data.QPoint(int(x), int(y))
+        return qt.QPoint(int(x), int(y))
     elif len(args) == 0:
-        return data.QPoint()
+        return qt.QPoint()
     else:
         raise Exception(
             "[functions.create_point] Unknown arguments: {}".format(args)
@@ -2703,8 +2735,138 @@ def create_point(*args):
 def create_size(*args):
     if len(args) == 2:
         width, height = args
-        return data.QSize(int(width), int(height))
+        return qt.QSize(int(width), int(height))
     else:
         raise Exception(
             "[functions.create_point] Unknown arguments: {}".format(args)
         )
+
+PERFORMANCE_MEASURING_FLAG = True
+def performance_timer_start():
+    if not PERFORMANCE_MEASURING_FLAG:
+        return
+    global performance_timer_starting_count
+    global performance_timer_last_point
+    performance_timer_starting_count = time.perf_counter()
+    performance_timer_last_point = performance_timer_starting_count
+
+def performance_timer_show(text=None):
+    if not PERFORMANCE_MEASURING_FLAG:
+        return
+    global performance_timer_last_point
+    try:
+        info_text = "PERFORMANCE-TIMER"
+        if text:
+            info_text = text
+        current_point = time.perf_counter()
+        end_count = current_point - performance_timer_starting_count
+        diff_count = current_point - performance_timer_last_point
+        performance_timer_last_point = current_point
+        print("Time: {:.4f}s / diff: {:.4f} -> [{}]".format(end_count, diff_count, info_text))
+    except:
+        print("[{}] Error!".format(info_text))
+
+def open_url(url):
+    webbrowser.open_new_tab(url)
+
+def open_item_in_explorer(path):
+    '''
+    Return False if the given file or folder cannot be opened in the system's
+    file explorer (eg. it doesn't exist).
+
+    '''
+    if os.path.isfile(path) or \
+            os.path.isdir(path):
+        path = path.replace('/', os.sep)
+        try:
+            if data.platform.lower() == 'windows':
+                subprocess.Popen(
+                    'explorer /select,"{}"'.format(path),
+                    shell = False,
+                )
+            else:
+                if os.path.isfile(path):
+                    subprocess.Popen(
+                        ['xdg-open', os.path.dirname(path)]
+                    )
+                else:
+                    subprocess.Popen(
+                        ['xdg-open', path]
+                    )
+        except Exception as e:
+            return False
+        # No error
+        return True
+    return False
+
+def get_edges_to_widget(widget, widget_window, size, offset=(0, 0)):
+    rect = widget.geometry()
+    window_position = widget_window.mapToGlobal(rect.topLeft())
+    widget_position = widget.mapToGlobal(rect.topLeft())
+    position = widget_position - window_position
+    # Center the rectangle to the widget
+    center = (
+        position.x() + ((rect.width() - size[0]) / 2) + offset[0],
+        position.y() + ((rect.height() - size[1]) / 2) + offset[1]
+    )
+    left = (
+        center[0] - (rect.width() / 2) + (size[0] / 2),
+        center[1]
+    )
+    right = (
+        center[0] + (rect.width() / 2) - (size[0] / 2),
+        center[1]
+    )
+    top = (
+        center[0],
+        center[1] - (rect.height() / 2) + (size[1] / 2)
+    )
+    bottom = (
+        center[0],
+        center[1] + (rect.height() / 2) - (size[1] / 2)
+    )
+    return (center, left, right, top, bottom)
+
+def get_screen_size():
+    if qt.PYQT_MODE < 6:
+        size = data.application.desktop().screen().rect().size()
+    else:
+        size = data.application.primaryScreen().size()
+    return size.width(), size.height()
+
+def center_to_current_screen(widget):
+    screens = data.application.screens()
+    if widget.windowHandle() is None:
+        return
+    for i,s in enumerate(screens):
+        if s is widget.windowHandle().screen():
+            geometry = s.geometry()
+            left = geometry.left()
+            top = geometry.top()
+            offset_width = (geometry.width() / 2) - (widget.width() / 2)
+            offset_height = (geometry.height() / 2) - (widget.height() / 2)
+            center = qt.QPoint(int(left + offset_width), int(top + offset_height))
+            def move(*args):
+                widget.move(
+                    center -
+                    qt.QPoint(0, 50) # Manual offset
+                )
+            qt.QTimer.singleShot(0, move)
+
+"""
+Docking system helpers
+"""
+def right_replace(s, old, new, occurrence):
+    li = s.rsplit(old, occurrence)
+    return new.join(li)
+
+def remove_last_box(name):
+    split = name.split('.')
+    return ".".join(split[:-1])
+
+def remove_tabs_from_name(name):
+    return name[ : name.index(".Tabs")]
+
+def remove_tab_number_from_name(name):
+    tabs_string = ".Tabs"
+    return name[ : (name.index(tabs_string)+len(tabs_string))]

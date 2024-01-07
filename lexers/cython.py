@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 
 """
@@ -9,12 +8,13 @@ import keyword
 import builtins
 import re
 import functions
+import qt
 import data
 import time
 import lexers
 
 
-class Cython(data.QsciLexerPython):
+class Cython(qt.QsciLexerPython):
     """Cython - basically Python with added keywords"""
     #Class variables
     _kwrds = None
@@ -75,11 +75,11 @@ class Cython(data.QsciLexerPython):
         for style in self.styles:
             # Papers
             self.setPaper(
-                data.QColor(theme.Paper.Python.Default), 
+                qt.QColor(data.theme["fonts"][style.lower()]["background"]), 
                 self.styles[style]
             )
             # Fonts
-            lexers.set_font(self, style, getattr(theme.Font.Python, style))
+            lexers.set_font(self, style, theme["fonts"][style.lower()])
     
     def keywords(self, state):
         """

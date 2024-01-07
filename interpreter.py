@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Copyright (c) 2013-2018 Matic Kukovec. 
+Copyright (c) 2013-2023 Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -14,19 +14,24 @@ For complete license information of the dependencies, check the 'additional_lice
 ##      Python Interactive Interpreter (Read-Eval-Print-Loop) functionality
 
 import os
+import re
 import sys
 import code
-import re
-import subprocess
 import threading
 import traceback
+import subprocess
+
+import hy
 import data
+import constants
 
 
 class CustomInterpreter(code.InteractiveInterpreter):
-    """SubClassed InteractiveInterpreter object"""
-    #Class variables (class variables >> this means that these variables are shared accross instances of this class)
-    #Modules that will be used by default by the interactive interpreter
+    """
+    SubClassed InteractiveInterpreter object
+    """
+    # Class variables (class variables >> this means that these variables are shared accross instances of this class)
+    # Modules that will be used by default by the interactive interpreter
     modules =   [
         "sys", 
         "os", 
@@ -47,102 +52,83 @@ class CustomInterpreter(code.InteractiveInterpreter):
     eval_error      = None
     #Dictionary of constants
     dict_const_references = dict(
-        OK          = data.FileStatus.OK, 
-        MODIFIED    = data.FileStatus.MODIFIED, 
-        FOUND       = data.SearchResult.FOUND, 
-        NOT_FOUND   = data.SearchResult.NOT_FOUND, 
-        CYCLED      = data.SearchResult.CYCLED, 
-        ONE         = data.WindowMode.ONE, 
-        THREE       = data.WindowMode.THREE, 
-        LEFT        = data.MainWindowSide.LEFT, 
-        RIGHT       = data.MainWindowSide.RIGHT, 
+        OK          = constants.FileStatus.OK, 
+        MODIFIED    = constants.FileStatus.MODIFIED, 
+        FOUND       = constants.SearchResult.FOUND, 
+        NOT_FOUND   = constants.SearchResult.NOT_FOUND, 
+        CYCLED      = constants.SearchResult.CYCLED, 
+        ONE         = constants.WindowMode.ONE, 
+        THREE       = constants.WindowMode.THREE, 
+        LEFT        = constants.MainWindowSide.LEFT, 
+        RIGHT       = constants.MainWindowSide.RIGHT, 
     )
     #The escape sequence for built in functions
     re_escape_sequence = "lit#"
-    #Dictionary of regular expression sequences for replacing internal keywords with python objects,
+    # Dictionary of regular expression sequences for replacing internal keywords with python objects,
     #mostly done for my personal desire to learn and play with regular expressions
     dict_re_references = dict(
         quit                        = (r"^quit$" , r"quit()"),
         exit                        = (r"^exit$", r"exit()"),
         bye                         = (r"^bye\(\)$|^bye$", r"exit()"),
-        spin_r                      = (r"^spin_r\(\)$|^spin_r$", r"form.view.spin_tab_widgets()"), 
-        spin_l                      = (r"^spin_l\(\)$|^spin_l$", r"form.view.spin_tab_widgets(1)"),       
         clear_repl_tab              = (r"^clear_repl_tab$", r"clear_repl_tab()"), 
         new                         = (r"^new$", r"new()"),
         set_all_text                = (
             r"(?<!\.)(?<!{:s})set_all_text".format(re_escape_sequence), 
-            r"main.currentWidget().set_all_text"
+            r"form.get_tab_by_indication().set_all_text"
         ), 
         get_lines                   = (
             r"(?<!\.)(?<!{:s})get_lines".format(re_escape_sequence), 
-            r"main.currentWidget().get_lines",
+            r"form.get_tab_by_indication().get_lines",
         ), 
         line_list                   = (
             r"(?<!\.)(?<!{:s})line_list".format(re_escape_sequence), 
-            r"main.currentWidget().line_list"
+            r"form.get_tab_by_indication().line_list"
         ), 
         line_count                  = (
             r"(?<!\.)(?<!{:s})line_count".format(re_escape_sequence), 
-            r"main.currentWidget().line_count"
+            r"form.get_tab_by_indication().line_count"
         ), 
         lines                       = (
             r"(?<![\.|_|\w|\"])(?<!{:s})lines\(\)|(?<![\.|_|\w|\"])(?<!{:s})lines".format(
                 re_escape_sequence, 
                 re_escape_sequence
             ), 
-            r"main.currentWidget().lines()"
+            r"form.get_tab_by_indication().lines()"
         ),
         find_and_highlight          = (
             r"(?<!\.)(?<!{:s})find_and_highlight.format(re_escape_sequence)", 
-            r"main.currentWidget().find_and_highlight"
+            r"form.get_tab_by_indication().find_and_highlight"
         ),
         clear_highlights            = (r"^clear_highlights$", r"clear_highlights()"),   
-        undo                        = (r"^undo\(\)$|^undo$", r"main.currentWidget().undo()"),
-        redo                        = (r"^redo\(\)$|^redo$", r"main.currentWidget().redo()"),
+        undo                        = (r"^undo\(\)$|^undo$", r"form.get_tab_by_indication().undo()"),
+        redo                        = (r"^redo\(\)$|^redo$", r"form.get_tab_by_indication().redo()"),
         terminal                    = (r"^terminal$", r"terminal()"),
         get_cwd                     = (r"^get_cwd\(\)$|^get_cwd$", r"get_cwd()"),
         set_cwd                     = (r"^set_cwd\(\)$|^set_cwd$", r"set_cwd()"),
         update_cwd                  = (r"^update_cwd\(\)$|^update_cwd$", r"update_cwd()"),
         open_cwd                    = (r"^open_cwd\(\)$|^open_cwd$", r"open_cwd()"),
-        toggle_main_window_side     = (r"^toggle_main_window_side$", r"toggle_main_window_side()"),
-        append                      = (r"^append\(", r"cmain.append_to_lines("),
-        append_all                  = (r"^append_all\((.*)\)", r"cmain.append_to_lines(\g<1>, 1,cmain.lines())"),
-        prepend                     = (r"^prepend\(", r"cmain.prepend_to_lines("),
-        prepend_all                 = (r"^prepend_all\((.*)\)", r"cmain.prepend_to_lines(\g<1>, 1,cmain.lines())"),
-        close_tab                   = (r"^close_tab\(\)|^close_tab", r"main.close_tab()"),
-        undo_all                    = (r"^undo_all\(\)$|^undo_all$", r"main.currentWidget().undo_all()"),
-        redo_all                    = (r"^redo_all\(\)$|^redo_all$", r"main.currentWidget().redo_all()"),
-        indent_with_tabs            = (r"^indent_with_tabs\(\)$|^indent_with_tabs$", r"main.currentWidget().indent_with_tabs(True)"),
-        indent_with_spaces          = (r"^indent_with_spaces\(\)$|^indent_with_spaces$", r"main.currentWidget().indent_with_tabs()"),
-        tabs_to_spaces              = (r"^tabs_to_spaces\(\)$|^tabs_to_spaces$", r"main.currentWidget().tabs_to_spaces()"),
-        show_edge_marker            = (r"^show_edge_marker\(\)$|^show_edge_marker$", r"main.currentWidget().show_edge_marker()"),
-        hide_edge_marker            = (r"^hide_edge_marker\(\)$|^hide_edge_marker$", r"main.currentWidget().hide_edge_marker()"),
-        reload_file                 = (r"^reload_file|^reload_file\(\)", r"main.currentWidget().reload_file()"),
-        show_node_tree              = (r"^show_node_tree|^show_node_tree\(\)", r"show_node_tree(main.currentWidget())"),
-        for_each_line               = (r"(?<!\.)(?<!{:s})for_each_line\(".format(re_escape_sequence), r"cmain.for_each_line("),
-        remove_empty_lines          = (r"(?<!\.)(?<!{:s})remove_empty_lines\(".format(re_escape_sequence), r"cmain.remove_empty_lines("),
+        append                      = (r"^append\(", r"form.get_tab_by_indication().append_to_lines("),
+        append_all                  = (r"^append_all\((.*)\)", r"form.get_tab_by_indication().append_to_lines(\g<1>, 1,form.get_tab_by_indication().lines())"),
+        prepend                     = (r"^prepend\(", r"form.get_tab_by_indication().prepend_to_lines("),
+        prepend_all                 = (r"^prepend_all\((.*)\)", r"form.get_tab_by_indication().prepend_to_lines(\g<1>, 1,form.get_tab_by_indication().lines())"),
+        close_tab                   = (r"^close_tab\(\)|^close_tab", r"form.get_window_by_indication().close_tab()"),
+        undo_all                    = (r"^undo_all\(\)$|^undo_all$", r"form.get_tab_by_indication().undo_all()"),
+        redo_all                    = (r"^redo_all\(\)$|^redo_all$", r"form.get_tab_by_indication().redo_all()"),
+        indent_with_tabs            = (r"^indent_with_tabs\(\)$|^indent_with_tabs$", r"form.get_tab_by_indication().indent_with_tabs(True)"),
+        indent_with_spaces          = (r"^indent_with_spaces\(\)$|^indent_with_spaces$", r"form.get_tab_by_indication().indent_with_tabs()"),
+        tabs_to_spaces              = (r"^tabs_to_spaces\(\)$|^tabs_to_spaces$", r"form.get_tab_by_indication().tabs_to_spaces()"),
+        show_edge_marker            = (r"^show_edge_marker\(\)$|^show_edge_marker$", r"form.get_tab_by_indication().show_edge_marker()"),
+        hide_edge_marker            = (r"^hide_edge_marker\(\)$|^hide_edge_marker$", r"form.get_tab_by_indication().hide_edge_marker()"),
+        reload_file                 = (r"^reload_file|^reload_file\(\)", r"form.get_tab_by_indication().reload_file()"),
+        show_node_tree              = (r"^show_node_tree|^show_node_tree\(\)", r"show_node_tree(form.get_tab_by_indication())"),
+        for_each_line               = (r"(?<!\.)(?<!{:s})for_each_line\(".format(re_escape_sequence), r"form.get_tab_by_indication().for_each_line("),
+        remove_empty_lines          = (r"(?<!\.)(?<!{:s})remove_empty_lines\(".format(re_escape_sequence), r"form.get_tab_by_indication().remove_empty_lines("),
     )
     #Keywords that can appear anywhere in the REPL command and need to be replaced
     #The exco standard abbreviation for a function is a character/characters followed by a colon ":". E.G.: "p:('something')" is replaced by "print('something') "
     #"lit#" is an escape sequence for literal printing
     dict_keywords = dict(
-        current_main    = (
-            "cmain", 
-            r"(?<!{:s})cmain\(\)|(?<!{:s})cmain".format(re_escape_sequence, re_escape_sequence), 
-            r"main.currentWidget()"
-        ),
-        current_lower   = (
-            "clower", 
-            r"(?<!{:s})clower\(\)|(?<!{:s})clower".format(re_escape_sequence, re_escape_sequence), 
-            r"lower.currentWidget()"
-        ),
-        current_upper   = (
-            "cupper", 
-            r"(?<!{:s})cupper\(\)|(?<!{:s})cupper".format(re_escape_sequence, re_escape_sequence), 
-            r"upper.currentWidget()"
-        ),
         echo            = ("p:", r"^p:((.*)((?=\n)|(?=$)))", r"echo(\g<1>)"),
-        print_log       = ("pl:", r"^pl:((.*)((?=\n)|(?=$)))", r"print_log(\g<1>)"),
         run             = ("r: ", 
                            [(r"^(r:\s*)((?!\s*\")(.*))((?=\n)|(?=$))", r"run('\g<2>', show_console=False)"), 
                             (r"^r:(\s*)(\")(.*)(\")((?=\n)|(?=$))", r"run(\g<2>\g<3>\g<4>, show_console=False)")]),
@@ -165,19 +151,21 @@ class CustomInterpreter(code.InteractiveInterpreter):
     
     
     def __init__(self, initial_references, repl_print):
-        """Initialize the interactive interpreter"""
-        #Get the default references and add them to the initial_references list
+        """
+        Initialize the interactive interpreter
+        """
+        # Get the default references and add them to the initial_references list
         initial_references.update(self.get_default_references())
         """
         Initialize parent, from which the current class is inherited, 
         THIS MUST BE DONE SO THAT THE SUPERCLASS EXECUTES ITS __init__ !!!!!!
         """
-        #the InteractiveInterpreter object takes references as the first argument
+        # the InteractiveInterpreter object takes references as the first argument
         super().__init__(initial_references)
-        #Import all the default modules
+        # Import all the default modules
         for mod in self.modules:
             self.eval_command("import " + mod)
-        #Save the REPL print function as a reference
+        # Save the REPL print function as a reference
         self.repl_print = repl_print
     
     def eval_command(self, command, display_action=True):
@@ -186,37 +174,37 @@ class CustomInterpreter(code.InteractiveInterpreter):
         (inputted by the REPL ReplLineEdit and pressing enter)
         """
         try:
-            #Reset the error message
+            # Reset the error message
             self.eval_error = None
-            #Replace certain strings with methods
+            # Replace certain strings with methods
             filtered_command = self.replace_references(self.dict_re_references, command)
             filtered_command = self.replace_keywords(self.dict_keywords, filtered_command)
-            #Remove the literal sequences from the command
+            # Remove the literal sequences from the command
             filtered_command = filtered_command.replace(self.re_escape_sequence, "")
-            data.print_log("------------------")
-            data.print_log(">>> " + command)
-            data.print_log(">> " + filtered_command)
-            #Execute the filtered command string with the custom InteractiveInterpreter
-            #First try to evaluate the command string, to see if it's an expression
+            # Execute the filtered command string with the custom InteractiveInterpreter
+            # First try to evaluate the command string, to see if it's an expression
             try:
-                #Try to EVALUATE the command
-                data.print_log("Trying to EVALUATE the command.")
+                # Try to EVALUATE the command
                 eval_return = eval(filtered_command, self.locals)
                 if display_action == True:
                     self.repl_print(eval_return)
-                data.print_log(eval_return)
-                data.print_log("Evaluation succeeded!")
                 return None
             except:
-                #EXECUTE
+                # EXECUTE
                 self.eval_error = None
-                data.print_log("Evaluation failed! EXECUTING the command.")
-                #Execute and return the error message
+                # Execute and return the error message
                 return self._custom_runcode(filtered_command)
         except Exception as ex:
-            data.print_log("!! Cannot run code: \"" + str(command) + "\"")
-            data.print_log(str(ex))
             return "REPL evaluation error!"
+    
+    def eval_command_hy(self, command, display_action=True):
+        try:
+            eval_return = hy.eval(hy.read_many(command), self.locals)
+            if display_action == True and eval_return is not None:
+                self.repl_print(eval_return)
+            return None
+        except:
+            return self._custom_showtraceback()
     
     def _custom_runcode(self, code):
         """
@@ -279,60 +267,67 @@ class CustomInterpreter(code.InteractiveInterpreter):
         return command
         
     def update_locals(self, new_locals):
-        """Add new locals to the existing ones"""
+        """
+        Add new locals to the existing ones
+        """
         for new_local in new_locals:
-            #Check if the local is already in the current list of locals
+            # Check if the local is already in the current list of locals
             if new_local not in self.locals:
-                #Update the locals dictionary with the new item
+                # Update the locals dictionary with the new item
                 self.locals.update({new_local:new_locals[new_local]})
     
     def reset_locals(self):
-        """Clear all custom interpreter references in the locals dictionary"""
+        """
+        Clear all custom interpreter references in the locals dictionary
+        """
         self.locals = {}
     
     def run_cmd_process(self, command, show_console=True, output_to_repl=False):
-        """Function for running a command line process and return the result"""
+        """
+        Function for running a command line process and return the result
+        """
         #Check what is the current OS
         if data.platform == "Windows":
-            #Remove the PYTHONHOME environment variable that Nuitka creates. It causes problems
-            #when running the system's python interpreter!
-            os.environ['PYTHONHOME'] = ''
             if show_console == True:
                 #Double quotes have to be handled differently on Windows (don't know about Linux yet)
                 if '\"' in command:
                     process_commands = [
-                        "command = 'cmd.exe /c {:s} & pause'".format(command), 
-                        "subprocess.Popen(command)"
+                        "command = 'start cmd.exe /c {:s} & pause'".format(command), 
+                        "subprocess.Popen(command, shell=True)"
                     ]
                 else:
-                    process_commands = ["subprocess.Popen(['cmd.exe', '/c', '" + command + " & pause'])"]
+                    process_commands = ["subprocess.Popen(['start', 'cmd.exe', '/c', '" + command + " & pause'], shell=True)"]
             else:
                 if output_to_repl == True:
-                    options = 'startupinfo=startupinfo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT'
+                    options = 'startupinfo=startupinfo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True'
                     #Double quotes have to be handled differently on Windows (don't know about Linux yet)
                     if '\"' in command:
-                        sub_call = 'subprocess.Popen(\'cmd.exe /c {:s}\', {:s})'.format(command, options)
+                        sub_call = 'subprocess.Popen(\'start cmd.exe /c {:s}\', {:s})'.format(command, options)
                     else:
-                        sub_call = 'subprocess.Popen(["cmd.exe", "/c", "{:s}"], {:s})'.format(command, options)
-                    process_commands = ['startupinfo = subprocess.STARTUPINFO()', 
-                                        'startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW',
-                                        'result = ' + sub_call, 
-                                        '(output, err) = result.communicate()',
-                                        'print(output)']
+                        sub_call = 'subprocess.Popen(["start", "cmd.exe", "/c", "{:s}"], {:s})'.format(command, options)
+                    process_commands = [
+                        'startupinfo = subprocess.STARTUPINFO()', 
+                        'startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW',
+                        'result = ' + sub_call, 
+                        '(output, err) = result.communicate()',
+                        'print(output)'
+                    ]
                 else:
-                    options     = 'startupinfo=startupinfo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT'
+                    options = 'startupinfo=startupinfo, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True'
                     #Double quotes have to be handled differently on Windows (don't know about Linux yet)
                     if '\"' in command:
-                        sub_call = 'subprocess.Popen(\'cmd.exe /c {:s}\', {:s})'.format(command, options)
+                        sub_call = 'subprocess.Popen(\'start cmd.exe /c {:s}\', {:s})'.format(command, options)
                     else:
-                        sub_call = 'subprocess.Popen(["cmd.exe", "/c", "{:s}"], {:s})'.format(command, options)
+                        sub_call = 'subprocess.Popen(["start", "cmd.exe", "/c", "{:s}"], {:s})'.format(command, options)
                     """
                     'THE THIRD LINE HAS TO CONTAIN MORE THAN JUST sub_call! Otherwise the python
                     interpreter crashes! Don't know why yet.
                     """
-                    process_commands = ['startupinfo = subprocess.STARTUPINFO()', 
-                                        'startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW',
-                                        'try:\n  {:s}\nexcept Exception as ex:\n  print(ex)'.format(sub_call)]
+                    process_commands = [
+                        'startupinfo = subprocess.STARTUPINFO()', 
+                        'startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW',
+                        'try:\n  {:s}\nexcept Exception as ex:\n  print(ex)'.format(sub_call)
+                    ]
                 #Create a function that will evaluate commands in the new thread
                 def threaded_function(commands):
                     #Run the commands sequentially and check the result
@@ -378,16 +373,20 @@ class CustomInterpreter(code.InteractiveInterpreter):
                     ]
             else:
                 if output_to_repl == True:
-                    options     = 'stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True'
-                    sub_call    = 'subprocess.Popen("{:s}", {:s})'.format(command, options)
-                    process_commands =  ['result = ' + sub_call,
-                                         '(output, err) = result.communicate()',
-                                         'print(output)']
+                    options = 'stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True'
+                    sub_call = 'subprocess.Popen("{:s}", {:s})'.format(command, options)
+                    process_commands =  [
+                        'result = ' + sub_call,
+                        '(output, err) = result.communicate()',
+                        'print(output)'
+                    ]
                 else:
-                    options     = 'stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=False'
-                    sub_call    = 'subprocess.Popen("{:s}", {:s})'.format(command, options)
-                    process_commands =  ['result = ' + sub_call,
-                                         '(output, err) = result.communicate()']
+                    options = 'stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True'
+                    sub_call = 'subprocess.Popen("{:s}", {:s})'.format(command, options)
+                    process_commands =  [
+                        'result = ' + sub_call,
+                        '(output, err) = result.communicate()'
+                    ]
         #Run the commands sequentially and check the result
         for cmd in process_commands:
             result = self.eval_command(cmd)
@@ -395,7 +394,9 @@ class CustomInterpreter(code.InteractiveInterpreter):
                 return
     
     def create_terminal(self, dir=None):
-        """Spawn a new "terminal/command line" window asynchronously (currently works only on win32)"""
+        """
+        Spawn a new "terminal/command line" window asynchronously (currently works only on win32)
+        """
         #Change current working directory if it was supplied as an argument
         if dir != None:
             try:
@@ -417,7 +418,7 @@ class CustomInterpreter(code.InteractiveInterpreter):
                 self.repl_print(
                     "Error creating a '{}' terminal!".format(data.terminal) +
                     "To change the terminal application, edit the user settings.",
-                    data.MessageType.ERROR
+                    constants.MessageType.ERROR
                 )
     
     def get_default_references(self):
