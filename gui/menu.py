@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2013-2023 Matic Kukovec.
+Copyright (c) 2013-present Matic Kukovec.
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -55,13 +53,12 @@ class Menu(qt.QMenu):
 class MenuBar(qt.QMenuBar):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Set the default font
-        self.setFont(data.get_current_font())
         # Restyle
         self.update_style()
 
     def update_style(self):
-        pass
+        # Set the default font
+        self.setFont(data.get_current_font())
 
 
 

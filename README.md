@@ -13,7 +13,7 @@ https://www.youtube.com/watch?v=v-7fqJGv7Ts&feature
 ### License: ###
 __GNU General Public License v3.0__
 
-Copyright (c) 2013-2023 Matic Kukovec. All rights reserved.
+Copyright (c) 2013-2025 Matic Kukovec. All rights reserved.
   
 #### Additional licenses: ####
 All additional licenses are specified at the beginning of every source code file and in text file format in the ```additional_licenses``` directory. If I made any mistakes, please open an issue.
@@ -46,9 +46,15 @@ All additional licenses are specified at the beginning of every source code file
   - hy
   - psutil
   - pyte
-  - PyQt6 (or PyQt5)
+  - PyQt6
   - QScintilla
   - fpdf2
+  - black
+  - autopep8
+  - yapf
+  - clang-format
+  - ruff
+  - isort
   - ptyprocess (Linux only)
   - pywin32 (Windows only)
   - pywinpty (Windows only)

@@ -1,8 +1,10 @@
-
 """
-Copyright (c) 2021 embeetle.
-"""
+Copyright (c) 2013-present Matic Kukovec.
+Released under the GNU GPL3 license.
 
+For more information check the 'LICENSE.txt' file.
+For complete license information of the dependencies, check the 'additional_licenses' directory.
+"""
 
 import os
 import os.path
@@ -37,18 +39,12 @@ def set_application_font(name, size):
     # Check if font is properly loaded
     search_font_name = name.lower()
     font_found = False
-    if qt.PYQT_MODE < 6:
-        for fontname in qt.QFontDatabase().families(): # noqa
-            if search_font_name in fontname.lower():
-                font_found = True
-                break
-    else:
-        # The QFontDatabase class has now only static member functions. The constructor has been
-        # deprecated.
-        for fontname in qt.QFontDatabase.families():
-            if search_font_name in fontname.lower():
-                font_found = True
-                break
+    # The QFontDatabase class has now only static member functions. The constructor has been
+    # deprecated.
+    for fontname in qt.QFontDatabase.families():
+        if search_font_name in fontname.lower():
+            font_found = True
+            break
     if not font_found:
         raise Exception("[Fonts] Could not find correct font!")
 

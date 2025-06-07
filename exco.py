@@ -1,9 +1,7 @@
 #!/usr/bin/python3
 
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2013-2023 Matic Kukovec. 
+Copyright (c) 2013-present Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -137,6 +135,8 @@ def main():
     app = qt.QApplication(sys.argv)
     # Save the Qt application to the global reference
     data.application = app
+    # Create a proxy style
+    data.application.setStyle("Fusion")
     
     # Process control
     number_of_instances = components.processcontroller.check_opened_excos()

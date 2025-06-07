@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2013-2023 Matic Kukovec.
+Copyright (c) 2013-present Matic Kukovec.
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -184,10 +182,7 @@ class ReplHelper(qt.QsciScintilla):
     def wheelEvent(self, wheel_event):
         """Overridden mouse wheel rotate event"""
         key_modifiers = qt.QApplication.keyboardModifiers()
-        if qt.PYQT_MODE == 4:
-            delta = wheel_event.delta()
-        else:
-            delta = wheel_event.angleDelta().y()
+        delta = wheel_event.angleDelta().y()
         if delta < 0:
             if key_modifiers == qt.Qt.KeyboardModifier.ControlModifier:
                 #Zoom out the scintilla tab view

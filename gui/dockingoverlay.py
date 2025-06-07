@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2022 Embeetle.
+Copyright (c) 2013-present Matic Kukovec.
+Released under the GNU GPL3 license.
+
+For more information check the 'LICENSE.txt' file.
+For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
 import os
@@ -91,16 +93,7 @@ QLabel:hover {{
                 int(self.expanded_size[0]),
                 int(self.expanded_size[1]),
             )
-            if qt.PYQT_MODE < 6:
-                self.stored_drag_enter_event = qt.QDragEnterEvent(
-                    event.pos(),
-                    event.dropAction(),
-                    event.mimeData(),
-                    event.mouseButtons(),
-                    event.keyboardModifiers(),
-                )
-            else:
-                self.stored_drag_enter_event = event.clone()
+            self.stored_drag_enter_event = event.clone()
             self.widget.dragEnterEvent(event)
             return super().dragEnterEvent(event)
         

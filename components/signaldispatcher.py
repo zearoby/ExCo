@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2013-2023 Matic Kukovec. 
+Copyright (c) 2013-present Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -17,6 +15,8 @@ class GlobalSignalDispatcher(qt.QObject):
     Global signal dispatcher
     '''
     update_title = qt.pyqtSignal()
+    editor_initialized = qt.pyqtSignal(str)
+    editor_deleted = qt.pyqtSignal(str)
 
     
     def __init__(self, *args, **kwargs) -> None:

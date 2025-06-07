@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-
 """
-Copyright (c) 2013-2023 Matic Kukovec. 
+Copyright (c) 2013-present Matic Kukovec. 
 Released under the GNU GPL3 license.
 
 For more information check the 'LICENSE.txt' file.
@@ -63,6 +61,10 @@ class ThemeIndicator(qt.QLabel):
                 action.deleteLater()
                 action = None
         self.theme_menu = Menu(self)
+        # Add the description label
+        action_theme = qt.QAction("Select theme:", self.theme_menu)
+        action_theme.setEnabled(False)
+        self.theme_menu.addAction(action_theme)
         # Add the theme actions
         for theme in themes.get_all():
             action_theme = qt.QAction(theme["name"], self.theme_menu)
