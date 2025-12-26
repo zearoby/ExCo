@@ -12,6 +12,9 @@ clang-format
 beautifulsoup4
 ruff
 isort
+send2trash
+pyflakes
+watchdog
 
 # Linux
 ptyprocess>=0.7.0; platform_system == "Linux"

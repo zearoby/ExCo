@@ -15,10 +15,12 @@ import json
 import keyword
 import os
 import re
+import sys
 import traceback
-from typing import *
+from typing import Callable, Optional
 
 import components.actionfilter
+import components.codequality
 import components.communicator
 import components.processcontroller
 import components.thesquid
@@ -30,42 +32,55 @@ import libraryfunctions
 import qt
 import settings
 import settings.constants
+from components.pathwatcher import FileEvent, PathWatcher
 
 import gui.contextmenu
-
-from .custombuttons import *
-from .customeditor import *
-from .dialogs import *
-from .dockingoverlay import *
-from .excoinfo import *
-from .externalprogram import *
-from .functionwheel import *
-from .hexview import *
-from .menu import *
-from .messagelogger import *
-from .plaineditor import *
-from .replbox import *
-from .replhelper import *
-from .replindicator import *
-from .repllineedit import *
-from .sessionguimanipulator import *
-from .settingsguimanipulator import *
-from .stylesheets import *
-from .tabwidget import *
-from .templates import *
-from .terminal import *
-from .textdiffer import *
-from .thebox import *
-from .themeindicator import *
-from .treedisplays import *
+from gui.custombuttons import CustomButton
+from gui.customeditor import CustomEditor
+from gui.dialogs import (
+    CloseEditorDialog,
+    QuitDialog,
+    RestoreSessionDialog,
+    YesNoDialog,
+)
+from gui.dockingoverlay import DockingOverlay
+from gui.excoinfo import ExCoInfo
+from gui.externalprogram import ExternalWidget
+from gui.functionwheel import FunctionWheel
+from gui.hexview import HexView
+from gui.menu import Menu, MenuBar
+from gui.plaineditor import PlainEditor
+from gui.replbox import ReplBox
+from gui.replindicator import ReplIndicator
+from gui.sessionguimanipulator import SessionGuiManipulator
+from gui.settingsguimanipulator import SettingsGuiManipulator
+from gui.stylesheets import (
+    StyleSheetButton,
+    StyleSheetMenu,
+    StyleSheetMenuBar,
+    StyleSheetScrollbar,
+    StyleSheetTable,
+    StyleSheetTabWidget,
+    StyleSheetTooltip,
+    StyleSheetTreeWidget,
+)
+from gui.tabwidget import TabWidget
+from gui.templates import (
+    create_groupbox_with_layout,
+)
+from gui.terminal import (
+    Terminal,
+)
+from gui.textdiffer import TextDiffer
+from gui.thebox import TheBox
+from gui.themeindicator import ThemeIndicator
+from gui.treedisplays import (
+    TreeDisplay,
+    TreeExplorer,
+)
 
 if data.platform == "Windows":
     import win32gui
-"""
--------------------------------------------------
-Main window and its supporting objects
--------------------------------------------------
-"""
 
 
 class MainWindow(qt.QMainWindow):
@@ -157,14 +172,14 @@ class MainWindow(qt.QMainWindow):
         self.name = "{} - PID:{}".format(self.get_default_title(), os.getpid())
         self.setObjectName("Form")
         # IPC communicator
-        #        self.communicator = components.communicator.IpcCommunicator(self.name)
-        #        self.data_send.connect(self.communicator.send)
-        #        self.communicator.received.connect(self.__data_received)
+        # self.communicator = components.communicator.IpcCommunicator(self.name)
+        # self.data_send.connect(self.communicator.send)
+        # self.communicator.received.connect(self.__data_received)
         # Filc communicator
         self.communicator = components.communicator.FileCommunicator(self.name)
         self.communicator.received.connect(self.__data_received)
         # Set default font
-        self.setFont(data.get_current_font())
+        self.setFont(settings.get_current_font())
         # Initialize the main window title
         self.reset_title()
         # Initialize statusbar
@@ -224,6 +239,10 @@ class MainWindow(qt.QMainWindow):
             # the file_arguments is None
             if new_document == True:
                 self.create_new()
+            else:
+                # Restore last session
+                if settings.get("restore_last_session"):
+                    qt.QTimer.singleShot(0, self.__restore_last_session)
         # Show the PyQt / QScintilla version in statusbar
         self.statusbar_label_left.setText(data.LIBRARY_VERSIONS)
         self.display.repl_display_message(
@@ -238,6 +257,13 @@ class MainWindow(qt.QMainWindow):
             self.display.repl_display_message(
                 "Nim lexers imported.", message_type=constants.MessageType.SUCCESS
             )
+
+    def __restore_last_session(self) -> None:
+        last_layout_filepath = functions.unixify_join(
+            data.settings_directory, settings.get("last-layout-filename")
+        )
+        last_layout = functions.load_json_file(last_layout_filepath)
+        self.view.layout_restore(last_layout)
 
     def __del__(self) -> None:
         if hasattr(self, "communicator") and self.communicator is not None:
@@ -263,9 +289,12 @@ class MainWindow(qt.QMainWindow):
             if data.platform == "Windows":
 
                 def set_external_focus():
-                    handle = win32gui.WindowFromPoint(win32gui.GetCursorPos())
-                    if handle in ExternalWidget.handle_cache:
-                        win32gui.SetFocus(handle)
+                    try:
+                        handle = win32gui.WindowFromPoint(win32gui.GetCursorPos())
+                        if handle in ExternalWidget.handle_cache:
+                            win32gui.SetFocus(handle)
+                    except:
+                        traceback.print_exc()
 
                 qt.QTimer.singleShot(50, set_external_focus)
 
@@ -310,6 +339,7 @@ class MainWindow(qt.QMainWindow):
         if window is None:
             self.reset_title()
             return
+
         current_widget = window.currentWidget()
         current_index = window.currentIndex()
         if current_widget:
@@ -328,7 +358,7 @@ class MainWindow(qt.QMainWindow):
 
     def init_statusbar(self):
         self.statusbar = qt.QStatusBar(self)
-        self.statusbar.setFont(data.get_current_font())
+        self.statusbar.setFont(settings.get_current_font())
         self.display.write_to_statusbar("Status Bar")
         # Add label for showing the cursor position in a basic widget
         self.statusbar_label_left = qt.QLabel(self)
@@ -371,7 +401,6 @@ class MainWindow(qt.QMainWindow):
 
     def get_helper_window(self):
         helper_window = None
-        surface = 0
         windows = {}
         for tw in self.get_all_windows():
             compare_surface = tw.size().width() * tw.size().height()
@@ -386,7 +415,6 @@ class MainWindow(qt.QMainWindow):
 
     def get_repl_window(self):
         repl_window = None
-        surface = 0
         windows = {}
         for tw in self.get_all_windows():
             compare_surface = tw.size().width() * tw.size().height()
@@ -424,8 +452,7 @@ class MainWindow(qt.QMainWindow):
             open_cwd=self.open_cwd,
             close_all=self.close_all_tabs,
             # Settings functions
-            settings=self.settings.manipulator,
-            save_settings=self.settings.save,
+            settings=settings,
             load_settings=self.settings.restore,
             # Session functions
             session_add=self.sessions.add,
@@ -548,7 +575,11 @@ class MainWindow(qt.QMainWindow):
             self.display.write_to_statusbar(message)
 
         # Get the document path
-        path = os.path.dirname(current_widget.save_name)
+        window = self.get_window_by_indication()
+        if window is None:
+            return
+        current_widget = window.currentWidget()
+        path = os.path.dirname(current_widget.save_path)
         # Check if the path is not an empty string
         if path == "":
             message = "Document path is not valid!"
@@ -574,16 +605,14 @@ class MainWindow(qt.QMainWindow):
             else:
                 event.ignore()
         # Store current session if needed
-        if data.restore_last_session:
+        if settings.get("restore_last_session"):
             layout = self.view.layout_generate()
-            self.settings.manipulator.save_last_layout(layout)
+            settings.save_last_layout(layout)
 
     def resizeEvent(self, event):
         """
         Resize QMainWindow event
         """
-        # Save the size relations between basic widgets
-        self.view.save_layout()
         # Hide the function whell if it is displayed
         self.view.hide_all_overlay_widgets()
         # Accept the event
@@ -698,16 +727,16 @@ class MainWindow(qt.QMainWindow):
                 )
                 if encoding == "cp1250":
                     self.display.repl_display_success(
-                        "Saved file {} in ANSI encoding.".format(focused_tab.save_name)
+                        "Saved file {} in ANSI encoding.".format(focused_tab.save_path)
                     )
                 elif encoding == "ascii":
                     self.display.repl_display_success(
-                        "Saved file {} in ASCII encoding.".format(focused_tab.save_name)
+                        "Saved file {} in ASCII encoding.".format(focused_tab.save_path)
                     )
                 # Set the icon if it was set by the lexer
                 focused_tab.internals.update_icon(focused_tab)
                 # Reimport the user configuration file and update the menubar
-                if functions.is_config_file(focused_tab.save_name) == True:
+                if functions.is_config_file(focused_tab.save_path) == True:
                     self.update_menubar()
                     self.import_user_functions()
 
@@ -719,7 +748,7 @@ class MainWindow(qt.QMainWindow):
             # Set the icon if it was set by the lexer
             focused_tab.internals.update_icon(focused_tab)
             # Reimport the user configuration file and update the menubar
-            if functions.is_config_file(focused_tab.save_name) == True:
+            if functions.is_config_file(focused_tab.save_path) == True:
                 self.update_menubar()
                 self.import_user_functions()
 
@@ -851,7 +880,6 @@ class MainWindow(qt.QMainWindow):
 
         # File menu
         def construct_file_menu():
-            #            file_menu = self.menubar.addMenu("&File")
             file_menu = Menu("&File", self.menubar)
             self.menubar.addMenu(file_menu)
             file_menu.installEventFilter(click_filter)
@@ -862,7 +890,7 @@ class MainWindow(qt.QMainWindow):
 
             new_file_action = create_action(
                 "New",
-                settings.keyboard_shortcuts["general"]["new_file"],
+                settings.get("keyboard-shortcuts")["general"]["new_file"],
                 "Create new empty file",
                 "tango_icons/document-new.png",
                 special_create_new_file,
@@ -874,7 +902,7 @@ class MainWindow(qt.QMainWindow):
 
             open_file_action = create_action(
                 "Open",
-                settings.keyboard_shortcuts["general"]["open_file"],
+                settings.get("keyboard-shortcuts")["general"]["open_file"],
                 "Open file",
                 "tango_icons/document-open.png",
                 special_open_file,
@@ -887,7 +915,7 @@ class MainWindow(qt.QMainWindow):
 
             self.save_file_action = create_action(
                 "Save",
-                settings.keyboard_shortcuts["general"]["save_file"],
+                settings.get("keyboard-shortcuts")["general"]["save_file"],
                 "Save current file in the UTF-8 encoding",
                 "tango_icons/document-save.png",
                 special_save_file,
@@ -900,7 +928,7 @@ class MainWindow(qt.QMainWindow):
 
             self.saveas_file_action = create_action(
                 "Save As",
-                settings.keyboard_shortcuts["general"]["saveas_file"],
+                settings.get("keyboard-shortcuts")["general"]["saveas_file"],
                 "Save current file as a new file in the UTF-8 encoding",
                 "tango_icons/document-save-as.png",
                 special_saveas_file,
@@ -982,11 +1010,12 @@ class MainWindow(qt.QMainWindow):
 
             close_tab_action = create_action(
                 "Close Tab",
-                settings.keyboard_shortcuts["general"]["close_tab"],
+                settings.get("keyboard-shortcuts")["general"]["close_tab"],
                 "Close the current tab",
                 "tango_icons/close-tab.png",
                 close_tab,
             )
+
             # Close all
             close_all_action = create_action(
                 "Close All Tabs",
@@ -995,64 +1024,7 @@ class MainWindow(qt.QMainWindow):
                 "tango_icons/close-all-tabs.png",
                 self.close_all_tabs,
             )
-            # Add load/save settings options
-            save_settings_action = create_action(
-                "Save Settings",
-                None,
-                "Save current settings",
-                "tango_icons/file-settings-save.png",
-                self.settings.save,
-            )
-            load_settings_action = create_action(
-                "Load Settings",
-                None,
-                "Load saved settings",
-                "tango_icons/file-settings-load.png",
-                self.settings.restore,
-            )
 
-            # Add the editing option for the userfunctions file
-            def open_user_func_file():
-                user_definitions_file = os.path.join(
-                    data.application_directory, data.config_file
-                )
-                # Test if userfunctions file exists
-                if os.path.isfile(user_definitions_file) == False:
-                    self.display.repl_display_message(
-                        "User definitions file does not exist!",
-                        message_type=constants.MessageType.ERROR,
-                    )
-                    message = "Do you wish to generate the default user definition and function file?"
-                    reply = YesNoDialog.question(message)
-                    if reply == constants.DialogResult.Yes.value:
-                        functions.create_default_config_file()
-                        self.display.repl_display_message(
-                            "Default user definitions file generated!",
-                            message_type=constants.MessageType.SUCCESS,
-                        )
-                    else:
-                        return
-                self.open_file(user_definitions_file)
-
-            edit_functions_action = create_action(
-                "Edit User Definitions",
-                None,
-                "Open the {} file for editing in the main window".format(
-                    data.config_file
-                ),
-                "tango_icons/file-user-funcs.png",
-                open_user_func_file,
-            )
-            # Add the reload option for the userfunctions file
-            reload_functions_action = create_action(
-                "Reload User Definitions",
-                None,
-                "Reload the {} file to refresh user defined definitions and functions".format(
-                    data.config_file
-                ),
-                "tango_icons/file-user-funcs-reload.png",
-                self.import_user_functions,
-            )
             # Add recent file list in the file menu
             recent_file_list_menu = self.view.create_recent_file_list_menu()
             clear_recent_file_list_action = create_action(
@@ -1062,6 +1034,7 @@ class MainWindow(qt.QMainWindow):
                 "tango_icons/edit-clear.png",
                 self.view.clear_recent_file_list,
             )
+
             # Add the actions to the File menu
             file_menu.addAction(new_file_action)
             file_menu.addAction(open_file_action)
@@ -1072,12 +1045,6 @@ class MainWindow(qt.QMainWindow):
             file_menu.addSeparator()
             file_menu.addAction(close_tab_action)
             file_menu.addAction(close_all_action)
-            file_menu.addSeparator()
-            file_menu.addAction(save_settings_action)
-            file_menu.addAction(load_settings_action)
-            file_menu.addSeparator()
-            file_menu.addAction(edit_functions_action)
-            file_menu.addAction(reload_functions_action)
             file_menu.addSeparator()
             file_menu.addMenu(recent_file_list_menu)
             file_menu.addAction(clear_recent_file_list_action)
@@ -1100,8 +1067,8 @@ class MainWindow(qt.QMainWindow):
             temp_string = "Copy any selected text in the currently "
             temp_string += "selected window to the clipboard"
             copy_action = create_action(
-                "Copy\t" + settings.keyboard_shortcuts["editor"]["copy"],
-                "#" + settings.keyboard_shortcuts["editor"]["copy"],
+                "Copy\t" + settings.get("keyboard-shortcuts")["editor"]["copy"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["copy"],
                 temp_string,
                 "tango_icons/edit-copy.png",
                 copy,
@@ -1114,8 +1081,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             cut_action = create_action(
-                "Cut\t" + settings.keyboard_shortcuts["editor"]["cut"],
-                "#" + settings.keyboard_shortcuts["editor"]["cut"],
+                "Cut\t" + settings.get("keyboard-shortcuts")["editor"]["cut"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["cut"],
                 "Cut any selected text in the currently selected window to the clipboard",
                 "tango_icons/edit-cut.png",
                 cut,
@@ -1128,8 +1095,8 @@ class MainWindow(qt.QMainWindow):
                     pass
 
             paste_action = create_action(
-                "Paste\t" + settings.keyboard_shortcuts["editor"]["paste"],
-                "#" + settings.keyboard_shortcuts["editor"]["paste"],
+                "Paste\t" + settings.get("keyboard-shortcuts")["editor"]["paste"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["paste"],
                 "Paste the text in the clipboard to the currenty selected window",
                 "tango_icons/edit-paste.png",
                 paste,
@@ -1142,8 +1109,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             undo_action = create_action(
-                "Undo\t" + settings.keyboard_shortcuts["editor"]["undo"],
-                "#" + settings.keyboard_shortcuts["editor"]["undo"],
+                "Undo\t" + settings.get("keyboard-shortcuts")["editor"]["undo"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["undo"],
                 "Undo last editor action in the currenty selected window",
                 "tango_icons/edit-undo.png",
                 undo,
@@ -1156,8 +1123,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             redo_action = create_action(
-                "Redo\t" + settings.keyboard_shortcuts["editor"]["redo"],
-                "#" + settings.keyboard_shortcuts["editor"]["redo"],
+                "Redo\t" + settings.get("keyboard-shortcuts")["editor"]["redo"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["redo"],
                 "Redo last undone editor action in the currenty selected window",
                 "tango_icons/edit-redo.png",
                 redo,
@@ -1170,8 +1137,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             select_all_action = create_action(
-                "Select All\t" + settings.keyboard_shortcuts["editor"]["select_all"],
-                "#" + settings.keyboard_shortcuts["editor"]["select_all"],
+                "Select All\t"
+                + settings.get("keyboard-shortcuts")["editor"]["select_all"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["select_all"],
                 "Select all of the text in the currenty selected window",
                 "tango_icons/edit-select-all.png",
                 select_all,
@@ -1184,8 +1152,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             indent_action = create_action(
-                "Indent\t" + settings.keyboard_shortcuts["editor"]["indent"],
-                "#" + settings.keyboard_shortcuts["editor"]["indent"],
+                "Indent\t" + settings.get("keyboard-shortcuts")["editor"]["indent"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["indent"],
                 "Indent the selected lines by the default width (4 spaces) in the currenty selected window",
                 "tango_icons/format-indent-more.png",
                 indent,
@@ -1198,8 +1166,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             unindent_action = create_action(
-                "Unindent\t" + settings.keyboard_shortcuts["editor"]["unindent"],
-                "#" + settings.keyboard_shortcuts["editor"]["unindent"],
+                "Unindent\t" + settings.get("keyboard-shortcuts")["editor"]["unindent"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["unindent"],
                 "Unindent the selected lines by the default width (4 spaces) in the currenty selected window",
                 "tango_icons/format-indent-less.png",
                 unindent,
@@ -1214,8 +1182,9 @@ class MainWindow(qt.QMainWindow):
 
             del_start_word_action = create_action(
                 "Delete start of word\t"
-                + settings.keyboard_shortcuts["editor"]["delete_start_of_word"],
-                "#" + settings.keyboard_shortcuts["editor"]["delete_start_of_word"],
+                + settings.get("keyboard-shortcuts")["editor"]["delete_start_of_word"],
+                "#"
+                + settings.get("keyboard-shortcuts")["editor"]["delete_start_of_word"],
                 "Delete the current word from the cursor to the starting index of the word",
                 "tango_icons/delete-start-word.png",
                 delete_start_of_word,
@@ -1230,8 +1199,9 @@ class MainWindow(qt.QMainWindow):
 
             del_end_word_action = create_action(
                 "Delete end of word\t"
-                + settings.keyboard_shortcuts["editor"]["delete_end_of_word"],
-                "#" + settings.keyboard_shortcuts["editor"]["delete_end_of_word"],
+                + settings.get("keyboard-shortcuts")["editor"]["delete_end_of_word"],
+                "#"
+                + settings.get("keyboard-shortcuts")["editor"]["delete_end_of_word"],
                 "Delete the current word from the cursor to the ending index of the word",
                 "tango_icons/delete-end-word.png",
                 delete_end_of_word,
@@ -1246,8 +1216,9 @@ class MainWindow(qt.QMainWindow):
 
             del_start_line_action = create_action(
                 "Delete start of line\t"
-                + settings.keyboard_shortcuts["editor"]["delete_start_of_line"],
-                "#" + settings.keyboard_shortcuts["editor"]["delete_start_of_line"],
+                + settings.get("keyboard-shortcuts")["editor"]["delete_start_of_line"],
+                "#"
+                + settings.get("keyboard-shortcuts")["editor"]["delete_start_of_line"],
                 "Delete the current line from the cursor to the starting index of the line",
                 "tango_icons/delete-start-line.png",
                 delete_start_of_line,
@@ -1262,8 +1233,9 @@ class MainWindow(qt.QMainWindow):
 
             del_end_line_action = create_action(
                 "Delete end of line\t"
-                + settings.keyboard_shortcuts["editor"]["delete_end_of_line"],
-                "#" + settings.keyboard_shortcuts["editor"]["delete_end_of_line"],
+                + settings.get("keyboard-shortcuts")["editor"]["delete_end_of_line"],
+                "#"
+                + settings.get("keyboard-shortcuts")["editor"]["delete_end_of_line"],
                 "Delete the current line from the cursor to the ending index of the line",
                 "tango_icons/delete-end-line.png",
                 delete_end_of_line,
@@ -1277,8 +1249,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             go_to_start_action = create_action(
-                "Go to start\t" + settings.keyboard_shortcuts["editor"]["go_to_start"],
-                "#" + settings.keyboard_shortcuts["editor"]["go_to_start"],
+                "Go to start\t"
+                + settings.get("keyboard-shortcuts")["editor"]["go_to_start"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["go_to_start"],
                 "Move cursor up to the start of the currently selected document",
                 "tango_icons/goto-start.png",
                 goto_to_start,
@@ -1292,8 +1265,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             go_to_end_action = create_action(
-                "Go to end\t" + settings.keyboard_shortcuts["editor"]["go_to_end"],
-                "#" + settings.keyboard_shortcuts["editor"]["go_to_end"],
+                "Go to end\t"
+                + settings.get("keyboard-shortcuts")["editor"]["go_to_end"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["go_to_end"],
                 "Move cursor down to the end of the currently selected document",
                 "tango_icons/goto-end.png",
                 goto_to_end,
@@ -1308,8 +1282,8 @@ class MainWindow(qt.QMainWindow):
 
             select_page_up_action = create_action(
                 "Select page up\t"
-                + settings.keyboard_shortcuts["editor"]["select_page_up"],
-                "#" + settings.keyboard_shortcuts["editor"]["select_page_up"],
+                + settings.get("keyboard-shortcuts")["editor"]["select_page_up"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["select_page_up"],
                 "Select text up one page of the currently selected document",
                 "tango_icons/Input-keyboard.svg",
                 select_page_up,
@@ -1324,8 +1298,8 @@ class MainWindow(qt.QMainWindow):
 
             select_page_down_action = create_action(
                 "Select page down\t"
-                + settings.keyboard_shortcuts["editor"]["select_page_down"],
-                "#" + settings.keyboard_shortcuts["editor"]["select_page_down"],
+                + settings.get("keyboard-shortcuts")["editor"]["select_page_down"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["select_page_down"],
                 "Select text down one page of the currently selected document",
                 "tango_icons/Input-keyboard.svg",
                 select_page_down,
@@ -1340,8 +1314,8 @@ class MainWindow(qt.QMainWindow):
 
             select_to_start_action = create_action(
                 "Select to start\t"
-                + settings.keyboard_shortcuts["editor"]["select_to_start"],
-                "#" + settings.keyboard_shortcuts["editor"]["select_to_start"],
+                + settings.get("keyboard-shortcuts")["editor"]["select_to_start"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["select_to_start"],
                 "Select all text up to the start of the currently selected document",
                 "tango_icons/Input-keyboard.svg",
                 select_to_start,
@@ -1356,8 +1330,8 @@ class MainWindow(qt.QMainWindow):
 
             select_to_end_action = create_action(
                 "Select to end\t"
-                + settings.keyboard_shortcuts["editor"]["select_to_end"],
-                "#" + settings.keyboard_shortcuts["editor"]["select_to_end"],
+                + settings.get("keyboard-shortcuts")["editor"]["select_to_end"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["select_to_end"],
                 "Select all text down to the start of the currently selected document",
                 "tango_icons/Input-keyboard.svg",
                 select_to_end,
@@ -1371,8 +1345,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             scroll_up_action = create_action(
-                "Scroll up\t" + settings.keyboard_shortcuts["editor"]["scroll_up"],
-                "#" + settings.keyboard_shortcuts["editor"]["scroll_up"],
+                "Scroll up\t"
+                + settings.get("keyboard-shortcuts")["editor"]["scroll_up"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["scroll_up"],
                 "Scroll up one page of the currently selected document",
                 "tango_icons/scroll-up.png",
                 scroll_up,
@@ -1386,8 +1361,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             scroll_down_action = create_action(
-                "Scroll down\t" + settings.keyboard_shortcuts["editor"]["scroll_down"],
-                "#" + settings.keyboard_shortcuts["editor"]["scroll_down"],
+                "Scroll down\t"
+                + settings.get("keyboard-shortcuts")["editor"]["scroll_down"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["scroll_down"],
                 "Scroll down one page of the currently selected document",
                 "tango_icons/scroll-down.png",
                 scroll_down,
@@ -1401,8 +1377,8 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             line_cut_action = create_action(
-                "Line Cut\t" + settings.keyboard_shortcuts["editor"]["line_cut"],
-                "#" + settings.keyboard_shortcuts["editor"]["line_cut"],
+                "Line Cut\t" + settings.get("keyboard-shortcuts")["editor"]["line_cut"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["line_cut"],
                 "Cut out the current line/lines of the currently selected document",
                 "tango_icons/edit-line-cut.png",
                 line_cut,
@@ -1416,8 +1392,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             line_copy_action = create_action(
-                "Line Copy\t" + settings.keyboard_shortcuts["editor"]["line_copy"],
-                "#" + settings.keyboard_shortcuts["editor"]["line_copy"],
+                "Line Copy\t"
+                + settings.get("keyboard-shortcuts")["editor"]["line_copy"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["line_copy"],
                 "Copy the current line/lines of the currently selected document",
                 "tango_icons/edit-line-copy.png",
                 line_copy,
@@ -1431,8 +1408,9 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             line_delete_action = create_action(
-                "Line Delete\t" + settings.keyboard_shortcuts["editor"]["line_delete"],
-                "#" + settings.keyboard_shortcuts["editor"]["line_delete"],
+                "Line Delete\t"
+                + settings.get("keyboard-shortcuts")["editor"]["line_delete"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["line_delete"],
                 "Delete the current line of the currently selected document",
                 "tango_icons/edit-line-delete.png",
                 line_delete,
@@ -1447,8 +1425,8 @@ class MainWindow(qt.QMainWindow):
 
             line_transpose_action = create_action(
                 "Line Transpose\t"
-                + settings.keyboard_shortcuts["editor"]["line_transpose"],
-                "#" + settings.keyboard_shortcuts["editor"]["line_transpose"],
+                + settings.get("keyboard-shortcuts")["editor"]["line_transpose"],
+                "#" + settings.get("keyboard-shortcuts")["editor"]["line_transpose"],
                 "Switch the current line with the line above it of the currently selected document",
                 "tango_icons/edit-line-transpose.png",
                 line_transpose,
@@ -1464,8 +1442,13 @@ class MainWindow(qt.QMainWindow):
 
             line_duplicate_action = create_action(
                 "Line/Selection Duplicate\t"
-                + settings.keyboard_shortcuts["editor"]["line_selection_duplicate"],
-                "#" + settings.keyboard_shortcuts["editor"]["line_selection_duplicate"],
+                + settings.get("keyboard-shortcuts")["editor"][
+                    "line_selection_duplicate"
+                ],
+                "#"
+                + settings.get("keyboard-shortcuts")["editor"][
+                    "line_selection_duplicate"
+                ],
                 "Duplicate the current line/selection of the currently selected document",
                 "tango_icons/edit-line-duplicate.png",
                 line_duplicate,
@@ -1538,7 +1521,7 @@ class MainWindow(qt.QMainWindow):
 
             find_action = create_action(
                 "Find",
-                settings.keyboard_shortcuts["general"]["find"],
+                settings.get("keyboard-shortcuts")["general"]["find"],
                 "Find text in the currently selected document",
                 "tango_icons/edit-find.png",
                 special_find,
@@ -1568,7 +1551,7 @@ class MainWindow(qt.QMainWindow):
 
             regex_find_action = create_action(
                 "Regex Find",
-                settings.keyboard_shortcuts["general"]["regex_find"],
+                settings.get("keyboard-shortcuts")["general"]["regex_find"],
                 "Find text in currently selected document using Python regular expressions",
                 "tango_icons/edit-find-re.png",
                 special_regex_find,
@@ -1597,7 +1580,7 @@ class MainWindow(qt.QMainWindow):
 
             find_and_replace_action = create_action(
                 "Find and Replace",
-                settings.keyboard_shortcuts["general"]["find_and_replace"],
+                settings.get("keyboard-shortcuts")["general"]["find_and_replace"],
                 "Find and replace one instance of text from cursor in currently selected document",
                 "tango_icons/edit-find-replace.png",
                 special_find_and_replace,
@@ -1631,7 +1614,7 @@ class MainWindow(qt.QMainWindow):
 
             regex_find_and_replace_action = create_action(
                 "Regex Find and Replace",
-                settings.keyboard_shortcuts["general"]["regex_find_and_replace"],
+                settings.get("keyboard-shortcuts")["general"]["regex_find_and_replace"],
                 "Find and replace one instance of text from cursor in currently selected document using Python regular expressions",
                 "tango_icons/edit-find-replace-re.png",
                 special_regex_find_and_replace,
@@ -1658,7 +1641,7 @@ class MainWindow(qt.QMainWindow):
 
             highlight_action = create_action(
                 "Highlight",
-                settings.keyboard_shortcuts["general"]["highlight"],
+                settings.get("keyboard-shortcuts")["general"]["highlight"],
                 "Highlight all instances of text in currently selected document",
                 "tango_icons/edit-highlight.png",
                 special_highlight,
@@ -1685,7 +1668,7 @@ class MainWindow(qt.QMainWindow):
 
             regex_highlight_action = create_action(
                 "Regex Highlight",
-                settings.keyboard_shortcuts["general"]["regex_highlight"],
+                settings.get("keyboard-shortcuts")["general"]["regex_highlight"],
                 "Highlight all instances of text in currently selected document using Python regular expressions",
                 "tango_icons/edit-highlight-re.png",
                 special_regex_highlight,
@@ -1707,7 +1690,7 @@ class MainWindow(qt.QMainWindow):
 
             clear_highlights_action = create_action(
                 "Clear Highlights",
-                settings.keyboard_shortcuts["general"]["clear_highlights"],
+                settings.get("keyboard-shortcuts")["general"]["clear_highlights"],
                 "Clear all higlights in currently selected document",
                 "tango_icons/edit-clear-highlights.png",
                 special_clear_highlights,
@@ -1731,7 +1714,7 @@ class MainWindow(qt.QMainWindow):
 
             replace_selection_action = create_action(
                 "Replace In Selection",
-                settings.keyboard_shortcuts["general"]["replace_selection"],
+                settings.get("keyboard-shortcuts")["general"]["replace_selection"],
                 "Replace all instances of text in the selected text of the current selected document",
                 "tango_icons/edit-replace-in-selection.png",
                 special_replace_in_selection,
@@ -1760,7 +1743,9 @@ class MainWindow(qt.QMainWindow):
             temp_string += "using Python regular expressions"
             regex_replace_selection_action = create_action(
                 "Regex Replace In Selection",
-                settings.keyboard_shortcuts["general"]["regex_replace_selection"],
+                settings.get("keyboard-shortcuts")["general"][
+                    "regex_replace_selection"
+                ],
                 temp_string,
                 "tango_icons/edit-replace-in-selection-re.png",
                 special_regex_replace_in_selection,
@@ -1789,7 +1774,7 @@ class MainWindow(qt.QMainWindow):
 
             replace_all_action = create_action(
                 "Replace All",
-                settings.keyboard_shortcuts["general"]["replace_all"],
+                settings.get("keyboard-shortcuts")["general"]["replace_all"],
                 "Replace all instances of text in currently selected document",
                 "tango_icons/edit-replace-all.png",
                 special_replace_all,
@@ -1818,7 +1803,7 @@ class MainWindow(qt.QMainWindow):
 
             regex_replace_all_action = create_action(
                 "Regex Replace All",
-                settings.keyboard_shortcuts["general"]["regex_replace_all"],
+                settings.get("keyboard-shortcuts")["general"]["regex_replace_all"],
                 "Replace all instances of text in currently selected document using Python regular expressions",
                 "tango_icons/edit-replace-all-re.png",
                 special_regex_replace_all,
@@ -1833,7 +1818,7 @@ class MainWindow(qt.QMainWindow):
 
             toggle_comment_action = create_action(
                 "Comment/Uncomment",
-                settings.keyboard_shortcuts["general"]["toggle_comment"],
+                settings.get("keyboard-shortcuts")["general"]["toggle_comment"],
                 "Toggle comments for the selected lines or single line in the currently selected document",
                 "tango_icons/edit-comment-uncomment.png",
                 comment_uncomment,
@@ -1841,13 +1826,13 @@ class MainWindow(qt.QMainWindow):
 
             def toggle_autocompletions():
                 try:
-                    self.get_tab_by_focus().toggle_autocompletions()
+                    self.get_tab_by_focus().autocompletion_toggle()
                 except:
                     self.display.repl_display_error(traceback.format_exc())
 
             toggle_autocompletion_action = create_action(
                 "Enable/Disable Autocompletion",
-                settings.keyboard_shortcuts["general"]["toggle_autocompletion"],
+                settings.get("keyboard-shortcuts")["general"]["toggle_autocompletion"],
                 "Enable/Disable autocompletions for the currently selected document",
                 "tango_icons/edit-autocompletion.png",
                 toggle_autocompletions,
@@ -1861,7 +1846,7 @@ class MainWindow(qt.QMainWindow):
 
             toggle_wrap_action = create_action(
                 "Enable/Disable Line Wrapping",
-                settings.keyboard_shortcuts["general"]["toggle_wrap"],
+                settings.get("keyboard-shortcuts")["general"]["toggle_wrap"],
                 "Enable/Disable line wrapping for the currently selected document",
                 "tango_icons/wordwrap.png",
                 toggle_wordwrap,
@@ -1875,7 +1860,7 @@ class MainWindow(qt.QMainWindow):
 
             reload_file_action = create_action(
                 "Reload file",
-                settings.keyboard_shortcuts["general"]["reload_file"],
+                settings.get("keyboard-shortcuts")["general"]["reload_file"],
                 "Reload file from disk, will prompt if file contains changes",
                 "tango_icons/view-refresh.png",
                 reload_file,
@@ -1894,7 +1879,7 @@ class MainWindow(qt.QMainWindow):
 
             node_tree_action = create_action(
                 "Create/reload node tree (C / Nim / Python3)",
-                settings.keyboard_shortcuts["general"]["node_tree"],
+                settings.get("keyboard-shortcuts")["general"]["node_tree"],
                 "Create a node tree for the code for the currently selected document (C / Nim / Python3)",
                 "tango_icons/edit-node-tree.png",
                 create_node_tree,
@@ -1915,7 +1900,7 @@ class MainWindow(qt.QMainWindow):
 
             goto_line_action = create_action(
                 "Goto line",
-                settings.keyboard_shortcuts["general"]["goto_line"],
+                settings.get("keyboard-shortcuts")["general"]["goto_line"],
                 "Go to the specified line in the current main window document",
                 "tango_icons/edit-goto.png",
                 special_goto_line,
@@ -1931,7 +1916,7 @@ class MainWindow(qt.QMainWindow):
             temp_string += "(SPACE ON THE LEFT SIDE OF LINES IS STRIPPED!)"
             indent_to_cursor_action = create_action(
                 "Indent to cursor",
-                settings.keyboard_shortcuts["general"]["indent_to_cursor"],
+                settings.get("keyboard-shortcuts")["general"]["indent_to_cursor"],
                 temp_string,
                 "tango_icons/edit-indent-to-cursor.png",
                 special_indent_to_cursor,
@@ -1943,7 +1928,7 @@ class MainWindow(qt.QMainWindow):
 
             to_uppercase_action = create_action(
                 "Selection to UPPERCASE",
-                settings.keyboard_shortcuts["general"]["to_uppercase"],
+                settings.get("keyboard-shortcuts")["general"]["to_uppercase"],
                 "Convert selected text to UPPERCASE",
                 "tango_icons/edit-case-to-upper.png",
                 special_to_uppercase,
@@ -1955,7 +1940,7 @@ class MainWindow(qt.QMainWindow):
 
             to_lowercase_action = create_action(
                 "Selection to lowercase",
-                settings.keyboard_shortcuts["general"]["to_lowercase"],
+                settings.get("keyboard-shortcuts")["general"]["to_lowercase"],
                 "Convert selected text to lowercase",
                 "tango_icons/edit-case-to-lower.png",
                 special_to_lowercase,
@@ -1985,7 +1970,7 @@ class MainWindow(qt.QMainWindow):
 
             find_in_documents_action = create_action(
                 "Find in open documents",
-                settings.keyboard_shortcuts["general"]["find_in_documents"],
+                settings.get("keyboard-shortcuts")["general"]["find_in_documents"],
                 temp_string,
                 "tango_icons/edit-find-in-open-documents.png",
                 special_find_in_open_documents,
@@ -2017,7 +2002,9 @@ class MainWindow(qt.QMainWindow):
 
             find_replace_in_documents_action = create_action(
                 "Find and replace in open documents",
-                settings.keyboard_shortcuts["general"]["find_replace_in_documents"],
+                settings.get("keyboard-shortcuts")["general"][
+                    "find_replace_in_documents"
+                ],
                 temp_string,
                 "tango_icons/edit-replace-in-open-documents.png",
                 special_find_replace_in_open_documents,
@@ -2049,7 +2036,9 @@ class MainWindow(qt.QMainWindow):
 
             replace_all_in_documents_action = create_action(
                 "Replace all in open documents",
-                settings.keyboard_shortcuts["general"]["replace_all_in_documents"],
+                settings.get("keyboard-shortcuts")["general"][
+                    "replace_all_in_documents"
+                ],
                 "Replace all instances of search text across all open documents in the currently selected window",
                 "tango_icons/edit-replace-all-in-open-documents.png",
                 special_replace_all_in_open_documents,
@@ -2081,39 +2070,6 @@ class MainWindow(qt.QMainWindow):
                 "tango_icons/gnome-web-browser.png",
                 open_in_browser,
             )
-            # Adding the edit menu and constructing all of the options
-            edit_menu.addAction(find_action)
-            edit_menu.addAction(regex_find_action)
-            edit_menu.addAction(find_and_replace_action)
-            edit_menu.addAction(regex_find_and_replace_action)
-            edit_menu.addAction(goto_line_action)
-            edit_menu.addAction(indent_to_cursor_action)
-            edit_menu.addAction(highlight_action)
-            edit_menu.addAction(regex_highlight_action)
-            edit_menu.addAction(clear_highlights_action)
-            edit_menu.addAction(replace_selection_action)
-            edit_menu.addAction(regex_replace_selection_action)
-            edit_menu.addAction(replace_all_action)
-            edit_menu.addAction(regex_replace_all_action)
-            edit_menu.addAction(toggle_comment_action)
-            edit_menu.addAction(toggle_autocompletion_action)
-            edit_menu.addAction(toggle_wrap_action)
-            edit_menu.addAction(to_uppercase_action)
-            edit_menu.addAction(to_lowercase_action)
-            edit_menu.addAction(node_tree_action)
-            edit_menu.addAction(reload_file_action)
-            edit_menu.addAction(open_in_browser_action)
-            edit_menu.addAction(reset_context_menu_action)
-            edit_menu.addSeparator()
-            edit_menu.addAction(find_in_documents_action)
-            edit_menu.addAction(find_replace_in_documents_action)
-            edit_menu.addAction(replace_all_in_documents_action)
-
-        # System menu
-        def construct_system_menu():
-            system_menu = Menu("S&ystem", self.menubar)
-            self.menubar.addMenu(system_menu)
-            system_menu.installEventFilter(click_filter)
 
             def special_find_in():
                 # The second argument is raw, so that single backslashes work for windows paths
@@ -2142,7 +2098,7 @@ class MainWindow(qt.QMainWindow):
             temp_string += "that contain the search string"
             find_in_files_action = create_action(
                 "Find in files",
-                settings.keyboard_shortcuts["general"]["find_in_files"],
+                settings.get("keyboard-shortcuts")["general"]["find_in_files"],
                 temp_string,
                 "tango_icons/system-find-in-files.png",
                 special_find_in,
@@ -2175,7 +2131,7 @@ class MainWindow(qt.QMainWindow):
             temp_string += "that have the search string in them"
             find_files_action = create_action(
                 "Find files",
-                settings.keyboard_shortcuts["general"]["find_files"],
+                settings.get("keyboard-shortcuts")["general"]["find_files"],
                 temp_string,
                 "tango_icons/system-find-files.png",
                 special_find_file,
@@ -2206,17 +2162,139 @@ class MainWindow(qt.QMainWindow):
             self.menubar_functions["special_replace_in_files_with_dialog"] = (
                 special_replace_in_files_with_dialog
             )
+
             temp_string = "Find all the files in a directory/subdirectories "
             temp_string += "that have the search string in them and replace all "
             temp_string += "instances in the file with the replace string"
             replace_in_files_action = create_action(
                 "Replace in files",
-                settings.keyboard_shortcuts["general"]["replace_in_files"],
+                settings.get("keyboard-shortcuts")["general"]["replace_in_files"],
                 temp_string,
                 "tango_icons/system-replace-in-files.png",
                 special_replace_in_files,
             )
 
+            # Adding the edit menu and constructing all of the options
+            edit_menu.addAction(find_action)
+            edit_menu.addAction(regex_find_action)
+            edit_menu.addAction(find_and_replace_action)
+            edit_menu.addAction(regex_find_and_replace_action)
+            edit_menu.addAction(goto_line_action)
+            edit_menu.addAction(indent_to_cursor_action)
+            edit_menu.addAction(highlight_action)
+            edit_menu.addAction(regex_highlight_action)
+            edit_menu.addAction(clear_highlights_action)
+            edit_menu.addAction(replace_selection_action)
+            edit_menu.addAction(regex_replace_selection_action)
+            edit_menu.addAction(replace_all_action)
+            edit_menu.addAction(regex_replace_all_action)
+            edit_menu.addAction(toggle_comment_action)
+            edit_menu.addAction(toggle_autocompletion_action)
+            edit_menu.addAction(toggle_wrap_action)
+            edit_menu.addAction(to_uppercase_action)
+            edit_menu.addAction(to_lowercase_action)
+            edit_menu.addAction(node_tree_action)
+            edit_menu.addAction(reload_file_action)
+            edit_menu.addAction(open_in_browser_action)
+            edit_menu.addAction(reset_context_menu_action)
+            edit_menu.addSeparator()
+            edit_menu.addAction(find_in_documents_action)
+            edit_menu.addAction(find_replace_in_documents_action)
+            edit_menu.addAction(replace_all_in_documents_action)
+            edit_menu.addSeparator()
+            edit_menu.addAction(find_files_action)
+            edit_menu.addAction(find_in_files_action)
+            edit_menu.addAction(replace_in_files_action)
+
+        # System menu
+        def construct_system_menu():
+            system_menu = Menu("S&ystem", self.menubar)
+            self.menubar.addMenu(system_menu)
+            system_menu.installEventFilter(click_filter)
+
+            # Open the settings file
+            def open_settings_file():
+                settings_file = settings.get("settings_filename_with_path")
+                # Test if userfunctions file exists
+                if os.path.isfile(settings_file) == False:
+                    self.display.repl_display_error(
+                        "User definitions file does not exist!\n"
+                    )
+                    return
+                self.open_file(settings_file)
+
+            open_settings_file_action = create_action(
+                "Open settings",
+                None,
+                "Open the settings file for editing.",
+                "tango_icons/settings.png",
+                open_settings_file,
+            )
+
+            # Add the editing option for the userfunctions file
+            def open_user_func_file():
+                user_definitions_file = os.path.join(
+                    data.application_directory, data.config_file
+                )
+                # Test if userfunctions file exists
+                if os.path.isfile(user_definitions_file) == False:
+                    self.display.repl_display_message(
+                        "User definitions file does not exist!",
+                        message_type=constants.MessageType.ERROR,
+                    )
+                    message = "Do you wish to generate the default user definition and function file?"
+                    reply = YesNoDialog.question(message)
+                    if reply == constants.DialogResult.Yes.value:
+                        functions.create_default_config_file()
+                        self.display.repl_display_message(
+                            "Default user definitions file generated!",
+                            message_type=constants.MessageType.SUCCESS,
+                        )
+                    else:
+                        return
+                self.open_file(user_definitions_file)
+
+            edit_functions_action = create_action(
+                "Open User Definitions",
+                None,
+                "Open the {} file for editing in the main window".format(
+                    data.config_file
+                ),
+                "tango_icons/file-user-funcs.png",
+                open_user_func_file,
+            )
+            # Add the reload option for the userfunctions file
+            reload_functions_action = create_action(
+                "Reload User Definitions",
+                None,
+                "Reload the {} file to refresh user defined definitions and functions".format(
+                    data.config_file
+                ),
+                "tango_icons/file-user-funcs-reload.png",
+                self.import_user_functions,
+            )
+
+            # Open the REPL history file
+            def open_repl_history():
+                user_repl_history_file = settings.get("repl_history_filename_with_path")
+                # Test if userfunctions file exists
+                if os.path.isfile(user_repl_history_file) == False:
+                    self.display.repl_display_warning(
+                        "User definitions file does not exist yet.\n"
+                        "Enter a command into the REPL and pres ENTER to create it."
+                    )
+                    return
+                self.open_file(user_repl_history_file)
+
+            open_repl_history_action = create_action(
+                "Open REPL history",
+                None,
+                "Open the REPL history file for editing.",
+                "tango_icons/repl-focus-single.png",
+                open_repl_history,
+            )
+
+            # Special run command
             def special_run_command():
                 self.repl.setText('run("",show_console=True)')
                 self.view.set_repl_type(constants.ReplType.SINGLE_LINE)
@@ -2236,7 +2314,7 @@ class MainWindow(qt.QMainWindow):
 
             cwd_tree_action = create_action(
                 "Show current working directory tree",
-                settings.keyboard_shortcuts["general"]["cwd_tree"],
+                settings.get("keyboard-shortcuts")["general"]["cwd_tree"],
                 "Create a node tree for the current working directory (CWD)",
                 "tango_icons/system-show-cwd-tree.png",
                 create_cwd_tree,
@@ -2247,7 +2325,7 @@ class MainWindow(qt.QMainWindow):
 
             show_explorer_action = create_action(
                 "Open current working directory in operating system explorer",
-                settings.keyboard_shortcuts["general"]["cwd_explorer"],
+                settings.get("keyboard-shortcuts")["general"]["cwd_explorer"],
                 "Open the current working directory in the operating systems explorer",
                 "tango_icons/system-show-cwd.png",
                 show_explorer,
@@ -2267,7 +2345,7 @@ class MainWindow(qt.QMainWindow):
 
             def open_general_explorer():
                 file_explorer = self.get_helper_window().tree_add_tab(
-                    data.file_explorer_tab_name, TreeExplorer
+                    constants.SpecialTabNames.FileExplorer.value, TreeExplorer
                 )
                 file_explorer.display_directory(os.getcwd())
                 file_explorer.open_file_signal.connect(self.open_file)
@@ -2280,7 +2358,7 @@ class MainWindow(qt.QMainWindow):
 
             show_new_explorer_tree_action = create_action(
                 "Show current working directory in tree explorer",
-                settings.keyboard_shortcuts["general"]["new_cwd_tree"],
+                settings.get("keyboard-shortcuts")["general"]["new_cwd_tree"],
                 "Show the current working directory in the tree explorer",
                 "tango_icons/system-show-cwd-tree-blue.png",
                 open_general_explorer,
@@ -2301,9 +2379,11 @@ class MainWindow(qt.QMainWindow):
                 show_terminal,
             )
             # Add the menu items
-            system_menu.addAction(find_files_action)
-            system_menu.addAction(find_in_files_action)
-            system_menu.addAction(replace_in_files_action)
+            system_menu.addSeparator()
+            system_menu.addAction(open_settings_file_action)
+            system_menu.addAction(open_repl_history_action)
+            system_menu.addAction(edit_functions_action)
+            system_menu.addAction(reload_functions_action)
             system_menu.addSeparator()
             system_menu.addAction(cwd_tree_action)
             system_menu.addAction(show_new_explorer_tree_action)
@@ -2349,7 +2429,6 @@ class MainWindow(qt.QMainWindow):
 
         # Lexers menu
         def construct_lexers_menu(parent):
-
             def set_lexer(lexer, lexer_name):
                 try:
                     # Get the focused tab and reset the lexer
@@ -2361,12 +2440,11 @@ class MainWindow(qt.QMainWindow):
                     # Display the lexer change
                     message = "Lexer changed to: {}".format(lexer_name)
                     self.display.repl_display_message(message)
-                except Exception as ex:
+                except:
                     message = "Error with lexer selection!\n"
                     message += "Select a window widget with an opened document first."
-                    self.display.repl_display_message(
-                        message, message_type=constants.MessageType.ERROR
-                    )
+                    self.display.repl_display_error(traceback.format_exc())
+                    self.display.repl_display_error(message)
                     self.display.write_to_statusbar(message)
 
             lexers_menu = self.display.create_lexers_menu(
@@ -2388,7 +2466,7 @@ class MainWindow(qt.QMainWindow):
             # Show/hide the function wheel
             function_wheel_toggle_action = create_action(
                 "Show/Hide Function Wheel",
-                settings.keyboard_shortcuts["general"]["function_wheel_toggle"],
+                settings.get("keyboard-shortcuts")["general"]["function_wheel_toggle"],
                 "Show/hide the Ex.Co. function wheel",
                 data.application_icon,
                 self.view.toggle_function_wheel,
@@ -2396,7 +2474,9 @@ class MainWindow(qt.QMainWindow):
             # Show/hide the settings manipulator
             settings_manipulator_toggle_action = create_action(
                 "Show/Hide Settings Manipulator",
-                settings.keyboard_shortcuts["general"]["settings_manipulator_toggle"],
+                settings.get("keyboard-shortcuts")["general"][
+                    "settings_manipulator_toggle"
+                ],
                 "Show/hide the Ex.Co. settings manipulator",
                 data.application_icon,
                 self.view.toggle_settings_manipulator,
@@ -2404,7 +2484,7 @@ class MainWindow(qt.QMainWindow):
             # Maximize/minimize entire Ex.Co. window
             maximize_window_action = create_action(
                 "Maximize/Normalize",
-                settings.keyboard_shortcuts["general"]["maximize_window"],
+                settings.get("keyboard-shortcuts")["general"]["maximize_window"],
                 "Maximize/Normalize application window",
                 "tango_icons/view-fullscreen.png",
                 self.view.toggle_window_size,
@@ -2416,7 +2496,7 @@ class MainWindow(qt.QMainWindow):
 
             main_focus_action = create_action(
                 "Focus Largest window",
-                settings.keyboard_shortcuts["general"]["main_focus"],
+                settings.get("keyboard-shortcuts")["general"]["main_focus"],
                 "Set focus to the largest window",
                 "tango_icons/view-focus-main.png",
                 focus_main_window,
@@ -2428,7 +2508,7 @@ class MainWindow(qt.QMainWindow):
 
             upper_focus_action = create_action(
                 "Focus helper window",
-                settings.keyboard_shortcuts["general"]["upper_focus"],
+                settings.get("keyboard-shortcuts")["general"]["upper_focus"],
                 "Set focus to the helper window",
                 "tango_icons/view-focus-upper.png",
                 focus_upper_window,
@@ -2440,7 +2520,7 @@ class MainWindow(qt.QMainWindow):
 
             lower_focus_action = create_action(
                 "Focus messages window",
-                settings.keyboard_shortcuts["general"]["lower_focus"],
+                settings.get("keyboard-shortcuts")["general"]["lower_focus"],
                 "Set focus to the messages window",
                 "tango_icons/view-focus-lower.png",
                 focus_lower_window,
@@ -2451,7 +2531,7 @@ class MainWindow(qt.QMainWindow):
 
             toggle_one_window_mode_action = create_action(
                 "One window mode toggle",
-                settings.keyboard_shortcuts["general"]["toggle_mode"],
+                settings.get("keyboard-shortcuts")["general"]["toggle_mode"],
                 "Toggle between one-window and stored layout",
                 "tango_icons/view-toggle-window-mode.png",
                 toggle_one_window_mode,
@@ -2465,7 +2545,7 @@ class MainWindow(qt.QMainWindow):
 
             select_tab_right_action = create_action(
                 "Select tab right",
-                settings.keyboard_shortcuts["general"]["select_tab_right"],
+                settings.get("keyboard-shortcuts")["general"]["select_tab_right"],
                 "Select one tab to the right in the currently selected window",
                 "tango_icons/view-select-tab-right.png",
                 select_tab_right,
@@ -2479,7 +2559,7 @@ class MainWindow(qt.QMainWindow):
 
             select_tab_left_action = create_action(
                 "Select tab left",
-                settings.keyboard_shortcuts["general"]["select_tab_left"],
+                settings.get("keyboard-shortcuts")["general"]["select_tab_left"],
                 "Select one tab to the left in the currently selected window",
                 "tango_icons/view-select-tab-left.png",
                 select_tab_left,
@@ -2493,7 +2573,7 @@ class MainWindow(qt.QMainWindow):
 
             move_tab_right_action = create_action(
                 "Move tab right",
-                settings.keyboard_shortcuts["general"]["move_tab_right"],
+                settings.get("keyboard-shortcuts")["general"]["move_tab_right"],
                 "Move the current tab in the currently selected window one position to the right",
                 "tango_icons/view-move-tab-right.png",
                 move_tab_right,
@@ -2507,7 +2587,7 @@ class MainWindow(qt.QMainWindow):
 
             move_tab_left_action = create_action(
                 "Move tab left",
-                settings.keyboard_shortcuts["general"]["move_tab_left"],
+                settings.get("keyboard-shortcuts")["general"]["move_tab_left"],
                 "Move the current tab in the currently selected window one position to the left",
                 "tango_icons/view-move-tab-left.png",
                 move_tab_left,
@@ -2521,7 +2601,7 @@ class MainWindow(qt.QMainWindow):
 
             toggle_edge_action = create_action(
                 "Toggle edge marker",
-                settings.keyboard_shortcuts["general"]["toggle_edge"],
+                settings.get("keyboard-shortcuts")["general"]["toggle_edge"],
                 "Toggle the display of the edge marker that shows the prefered maximum chars in a line",
                 "tango_icons/view-edge-marker.png",
                 show_edge,
@@ -2535,7 +2615,7 @@ class MainWindow(qt.QMainWindow):
 
             reset_zoom_action = create_action(
                 "Zoom reset",
-                settings.keyboard_shortcuts["general"]["reset_zoom"],
+                settings.get("keyboard-shortcuts")["general"]["reset_zoom"],
                 "Reset the zoom level on the currently focused document",
                 "tango_icons/view-zoom-reset.png",
                 reset_zoom,
@@ -2568,7 +2648,7 @@ class MainWindow(qt.QMainWindow):
             bookmark_menu.setIcon(temp_icon)
             bookmark_toggle_action = create_action(
                 "Toggle Bookmark",
-                settings.keyboard_shortcuts["general"]["bookmark_toggle"],
+                settings.get("keyboard-shortcuts")["general"]["bookmark_toggle"],
                 "Toggle a bookmark at the current document line",
                 "tango_icons/bookmark.png",
                 bookmark_toggle,
@@ -2607,7 +2687,7 @@ class MainWindow(qt.QMainWindow):
 
                 bookmark_goto_action = create_action(
                     "Bookmark Goto {:d}".format(i),
-                    settings.keyboard_shortcuts["general"]["bookmark_goto"][i],
+                    settings.get("keyboard-shortcuts")["general"]["bookmark_goto"][i],
                     "Go to bookmark number:{:d}".format(i),
                     "tango_icons/bookmarks-goto.png",
                     create_goto_bookmark(),
@@ -2623,7 +2703,7 @@ class MainWindow(qt.QMainWindow):
 
                 bookmark_store_action = create_action(
                     "Bookmark Store {:d}".format(i),
-                    settings.keyboard_shortcuts["general"]["bookmark_store"][i],
+                    settings.get("keyboard-shortcuts")["general"]["bookmark_store"][i],
                     "Store bookmark number:{:d}".format(i),
                     "tango_icons/bookmarks-store.png",
                     create_store_bookmark(),
@@ -2690,14 +2770,14 @@ class MainWindow(qt.QMainWindow):
             repl_menu.installEventFilter(click_filter)
             repeat_eval_action = create_action(
                 "REPL Repeat Command",
-                settings.keyboard_shortcuts["general"]["repeat_eval"],
+                settings.get("keyboard-shortcuts")["general"]["repeat_eval"],
                 "Repeat the last REPL command",
                 "tango_icons/repl-repeat-command.png",
                 self.repl.repeat_last_repl_eval,
             )
             repeat_cycle_lang_action = create_action(
                 "REPL Cycle Language",
-                settings.keyboard_shortcuts["general"]["repl_cycle_language"],
+                settings.get("keyboard-shortcuts")["general"]["repl_cycle_language"],
                 "Cycle the language used by the REPL",
                 "tango_icons/repl-repeat-command.png",
                 self.repl_box.cycle_language,
@@ -2710,8 +2790,12 @@ class MainWindow(qt.QMainWindow):
             repl_focus_action = create_action(
                 "Focus REPL(Single)",
                 [
-                    settings.keyboard_shortcuts["general"]["repl_focus_single_1"],
-                    settings.keyboard_shortcuts["general"]["repl_focus_single_2"],
+                    settings.get("keyboard-shortcuts")["general"][
+                        "repl_focus_single_1"
+                    ],
+                    settings.get("keyboard-shortcuts")["general"][
+                        "repl_focus_single_2"
+                    ],
                 ],
                 "Set focus to the Python REPL(Single Line)",
                 "tango_icons/repl-focus-single.png",
@@ -2724,7 +2808,7 @@ class MainWindow(qt.QMainWindow):
 
             repl_focus_multi_action = create_action(
                 "Focus REPL(Multi)",
-                settings.keyboard_shortcuts["general"]["repl_focus_multi"],
+                settings.get("keyboard-shortcuts")["general"]["repl_focus_multi"],
                 "Set focus to the Python REPL(Multi Line)",
                 "tango_icons/repl-focus-multi.png",
                 repl_multi_focus,
@@ -2849,7 +2933,7 @@ class MainWindow(qt.QMainWindow):
 
             # === Code formatting ===
             # Menu
-            formatting_menu = tools_menu.addMenu("Code formatting")
+            formatting_menu = tools_menu.addMenu("Formatting")
             temp_icon = functions.create_icon("tango_icons/view-edge-marker.png")
             formatting_menu.setIcon(temp_icon)
 
@@ -2885,9 +2969,9 @@ class MainWindow(qt.QMainWindow):
                     format_python_formatting_selection_func_generator(fl),
                 )
                 formatting_menu_python.addAction(format_python_action)
-            
+
             formatting_menu_python.addSeparator()
-            
+
             # Entire file
             def format_python_formatting_entire_text_func_generator(library_name: str):
                 def format_python_entire_text_func(code: str):
@@ -2959,7 +3043,7 @@ class MainWindow(qt.QMainWindow):
                     self.display.repl_display_error(traceback.format_exc())
 
             format_zig_action = create_action(
-                f"Format Zig code - entire file",
+                "Format Zig code - entire file",
                 None,
                 (
                     "Format Zig code in the entire selected document "
@@ -2969,6 +3053,59 @@ class MainWindow(qt.QMainWindow):
                 format_zig,
             )
             formatting_menu_zip.addAction(format_zig_action)
+            
+            # Nim
+            formatting_menu_nim = formatting_menu.addMenu("Nim")
+            temp_icon = functions.create_icon("language_icons/logo_nim.png")
+            formatting_menu_nim.setIcon(temp_icon)
+
+            def format_nim():
+                try:
+                    self.tools.format_nim_file()
+                except:
+                    self.display.repl_display_error(traceback.format_exc())
+
+            format_nim_action = create_action(
+                "Format Nim code - entire file",
+                None,
+                (
+                    "Format Nim code in the entire selected document "
+                    "using the 'nph' command line formatter"
+                ),
+                "language_icons/logo_nim.png",
+                format_nim,
+            )
+            formatting_menu_nim.addAction(format_nim_action)
+
+            # === Analyzing ===
+            # Menu
+            analyzing_menu = tools_menu.addMenu("Analyzing")
+            temp_icon = functions.create_icon("tango_icons/view-edge-marker.png")
+            analyzing_menu.setIcon(temp_icon)
+
+            analyzing_libraries = (
+                "Ruff",
+                "Pyflakes",
+            )
+
+            def analyze_python_file_func_generator(library_name: str):
+                def analyze_python_file_func():
+                    try:
+                        self.tools.analyze_python_file(library_name)
+                    except:
+                        self.display.repl_display_error(traceback.format_exc())
+
+                return analyze_python_file_func
+
+            for al in analyzing_libraries:
+                analyze_python_action = create_action(
+                    f"Analyze Python file - {al}",
+                    None,
+                    f"Analyze Python document using the {al} library",
+                    "language_icons/logo_python.png",
+                    analyze_python_file_func_generator(al.lower()),
+                )
+                analyzing_menu.addAction(analyze_python_action)
 
             # === Pretty printing ===
             # Menu
@@ -2979,7 +3116,9 @@ class MainWindow(qt.QMainWindow):
             # Pretty print JSON
             def pretty_print_json():
                 try:
-                    self.tools.pretty_print_text(constants.FormatterType.JSON)
+                    self.tools.pretty_print_text(
+                        constants.FormatterType.JSON, sort_keys=False
+                    )
                 except:
                     self.display.repl_display_error(traceback.format_exc())
 
@@ -2989,6 +3128,23 @@ class MainWindow(qt.QMainWindow):
                 "Pretty print JSON text in the selected document",
                 "language_icons/logo_json.png",
                 pretty_print_json,
+            )
+            pretty_print_menu.addAction(pretty_print_json_action)
+
+            def pretty_print_json_with_key_sorting():
+                try:
+                    self.tools.pretty_print_text(
+                        constants.FormatterType.JSON, sort_keys=True
+                    )
+                except:
+                    self.display.repl_display_error(traceback.format_exc())
+
+            pretty_print_json_action = create_action(
+                "Pretty print JSON text - with key sorting",
+                None,
+                "Pretty print JSON text with key sorting in the selected document",
+                "language_icons/logo_json.png",
+                pretty_print_json_with_key_sorting,
             )
             pretty_print_menu.addAction(pretty_print_json_action)
 
@@ -3339,7 +3495,7 @@ class MainWindow(qt.QMainWindow):
             if file != "":
                 new_tab = open_file_function(file, tab_widget)
                 self.repaint()
-                qt.QCoreApplication.processEvents()
+                functions.process_events()
                 return new_tab
         elif isinstance(file, list) == True:
             tabs = []
@@ -3347,7 +3503,8 @@ class MainWindow(qt.QMainWindow):
                 new_tab = open_file_function(f, tab_widget)
                 tabs.append(new_tab)
                 self.repaint()
-                qt.QCoreApplication.processEvents()
+                # Needed for every file opened to be visually updated clearly
+                functions.process_events()
             return tabs
         else:
             self.display.repl_display_message(
@@ -3418,14 +3575,13 @@ class MainWindow(qt.QMainWindow):
         # Change the windows style path to the Unix style
         file_with_path = file_with_path.replace("\\", "/")
         for tab_widget in self.get_all_windows():
-
             # Loop through all of the documents in the tab widget
             if _type == constants.FileType.Text:
                 for i in range(tab_widget.count()):
                     # Check the file name and file name with path
                     if (
                         tab_widget.widget(i).name == os.path.basename(file_with_path)
-                        and tab_widget.widget(i).save_name == file_with_path
+                        and tab_widget.widget(i).save_path == file_with_path
                     ):
                         # If the file is already open, get its index in the tab widget
                         found_tab_widget = tab_widget
@@ -3435,7 +3591,7 @@ class MainWindow(qt.QMainWindow):
                 for i in range(tab_widget.count()):
                     # Check the file name and file name with path
                     tab = tab_widget.widget(i)
-                    if isinstance(tab, HexView) and tab.save_name == file_with_path:
+                    if isinstance(tab, HexView) and tab.save_path == file_with_path:
                         # If the file is already open, get its index in the tab widget
                         found_tab_widget = tab_widget
                         found_index = i
@@ -3511,7 +3667,7 @@ class MainWindow(qt.QMainWindow):
         # Tab was not found
         return None
 
-    def get_tab_by_save_name(self, in_save_name):
+    def get_tab_by_save_path(self, in_save_path):
         """
         Find a tab using its save name (file path) in the tab widgets
         """
@@ -3521,7 +3677,7 @@ class MainWindow(qt.QMainWindow):
             for i in range(0, window.count()):
                 if (
                     isinstance(window.widget(i), CustomEditor)
-                    and window.widget(i).save_name == in_save_name
+                    and window.widget(i).save_path == in_save_path
                 ):
                     return window.widget(i)
         # Tab was not found
@@ -3679,8 +3835,6 @@ class MainWindow(qt.QMainWindow):
 
         # Class varibles
         _parent = None
-        # Custom object for manipulating the settings of Ex.Co.
-        manipulator = None
         # GUI Settings manipulator
         gui_manipulator = None
 
@@ -3690,8 +3844,6 @@ class MainWindow(qt.QMainWindow):
             """
             # Get the reference to the MainWindow parent object instance
             self._parent = parent
-            # Initialize the Ex.Co. settings object with the current working directory
-            self.manipulator = settings.SettingsFileManipulator()
 
         def update_recent_list(self, new_file=None):
             """
@@ -3708,7 +3860,7 @@ class MainWindow(qt.QMainWindow):
 
             # Update the file manipulator
             if new_file is not None:
-                self.manipulator.add_recent_file(new_file)
+                settings.add_recent_file(new_file)
             # Refresh the menubar recent list
             recent_files_menu = self._parent.recent_files_menu
             # !!Clear all of the actions from the menu OR YOU'LL HAVE MEMORY LEAKS!!
@@ -3719,7 +3871,7 @@ class MainWindow(qt.QMainWindow):
                 action = None
             recent_files_menu.clear()
             # Add the new recent files list to the menu
-            for recent_file in reversed(self.manipulator.recent_files):
+            for recent_file in reversed(settings.get("recent_files")):
                 # Iterate in the reverse order, so that the last file will be displayed
                 # on the top of the menubar "Recent Files" menu
                 recent_file_name = recent_file
@@ -3737,14 +3889,13 @@ class MainWindow(qt.QMainWindow):
                 recent_files_menu.addAction(new_file_action)
 
         def clear_recent_list(self):
-            self.manipulator.clear_recent_files()
+            settings.clear_recent_files()
 
         def restore(self):
             """Restore the previously stored settings"""
             # Load the settings from the initialization file
-            result = self.manipulator.load_settings()
+            result = settings.load()
             # Update the theme
-            data.theme = self.manipulator.theme
             self._parent.view.refresh_theme()
             # Update recent files list in the menubar
             self.update_recent_list()
@@ -3753,8 +3904,8 @@ class MainWindow(qt.QMainWindow):
             # Display message in statusbar
             self._parent.display.write_to_statusbar("Restored settings", 1000)
             # Update custon context menu functions
-            for func_type in self.manipulator.context_menu_functions.keys():
-                funcs = self.manipulator.context_menu_functions[func_type]
+            for func_type in settings.get("context_menu_functions").keys():
+                funcs = settings.get("context_menu_functions")[func_type]
                 for func_key in funcs.keys():
                     getattr(gui.contextmenu.ContextMenuHex, func_type)[func_key] = (
                         funcs[func_key]
@@ -3766,14 +3917,6 @@ class MainWindow(qt.QMainWindow):
                     "Error loading the settings file, using the default settings values!\nTHE SETTINGS FILE WILL NOT BE UPDATED!",
                     message_type=constants.MessageType.ERROR,
                 )
-
-        def save(self):
-            """Save the current settings"""
-            self.manipulator.save_settings(
-                data.theme, gui.contextmenu.ContextMenuHex.get_settings()
-            )
-            # Display message in statusbar
-            self._parent.display.write_to_statusbar("Saved settings", 1000)
 
     class Sessions:
         """
@@ -3815,7 +3958,7 @@ class MainWindow(qt.QMainWindow):
                 if len(all_windows) > 0:
                     # Check if the session is already stored
                     session_found = False
-                    group = self._parent.settings.manipulator.stored_sessions["main"]
+                    group = settings.get("stored_sessions")["main"]
                     for c in session_group_chain:
                         if c in group["groups"].keys():
                             group = group["groups"][c]
@@ -3823,7 +3966,7 @@ class MainWindow(qt.QMainWindow):
                         if session_name in group["sessions"].keys():
                             session_found = True
                     # Store the session
-                    self._parent.settings.manipulator.add_session(
+                    settings.get_sessions().add_session(
                         session_name,
                         session_group_chain,
                         self._parent.view.layout_generate(),
@@ -3853,7 +3996,7 @@ class MainWindow(qt.QMainWindow):
                     )
                     # Return error
                     return False
-            except Exception as ex:
+            except:
                 self._parent.display.repl_display_error(traceback.format_exc())
                 message = "Invalid document types in the main or upper window!"
                 self._parent.display.repl_display_error(message)
@@ -3911,7 +4054,7 @@ class MainWindow(qt.QMainWindow):
             self._parent.get_largest_window().clear()
             # Loop through the aplication directory and add the relevant files
             exco_main_files = []
-            exco_dir = self._parent.settings.manipulator.directories["application"]
+            exco_dir = settings.get("application-directory")
             exco_dirs = [
                 exco_dir,
                 os.path.join(exco_dir, "themes"),
@@ -3942,7 +4085,7 @@ class MainWindow(qt.QMainWindow):
             """
             Delete the session
             """
-            result = self._parent.settings.manipulator.remove_session(session)
+            result = settings.sessions.remove_session(session)
             if result == False:
                 # Session was not found
                 message = "Session '{}/{}' was not found!".format(
@@ -4017,9 +4160,7 @@ class MainWindow(qt.QMainWindow):
 
             # Process the groups
             sessions_menu = self._parent.sessions_menu
-            main_session_group = self._parent.settings.manipulator.stored_sessions[
-                "main"
-            ]
+            main_session_group = settings.get("stored_sessions")["main"]
             process_group(main_session_group, sessions_menu, create_menu=False)
 
         def get_window_documents(self):
@@ -4028,10 +4169,10 @@ class MainWindow(qt.QMainWindow):
             """
             window = self._parent.get_window_by_indication()
             documents = [
-                window.widget(i).save_name
+                window.widget(i).save_path
                 for i in range(window.count())
                 if window.widget(i).savable == constants.CanSave.YES
-                and window.widget(i).save_name != ""
+                and window.widget(i).save_path != ""
             ]
             return documents
 
@@ -4068,12 +4209,6 @@ class MainWindow(qt.QMainWindow):
             # Initialize the REPL state to unknown, so it will force
             # the form layout to refresh it
             self.repl_state = None
-
-        def save_layout(self):
-            """Save the widths of the splitters"""
-            # Check if the splitters are filled correctly
-            if self.layout_save_block == True:
-                return
 
         def layout_init(self, show_overlay=False):
             """
@@ -4132,11 +4267,13 @@ class MainWindow(qt.QMainWindow):
             self.layout_restore(settings.constants.default_layout)
             self.check_all_close_buttons()
 
+            functions.process_events()
+
         def show_about(self):
             """Show ExCo information"""
             about = ExCoInfo(
                 self._parent,
-                app_dir=self._parent.settings.manipulator.directories["application"],
+                app_dir=settings.get("application-directory"),
             )
             # The exec_() function shows the dialog in MODAL mode (the parent is unclickable while the dialog is shown)
             about.exec()
@@ -4247,7 +4384,7 @@ class MainWindow(qt.QMainWindow):
                 )
                 for w in reversed(widgets):
                     widget, tab_text = w
-                    if tab_text == "REPL MESSAGES":
+                    if tab_text == constants.SpecialTabNames.Messages.value:
                         continue
                     largest_window.addTab(widget, tab_text)
                     if hasattr(widget, "_parent"):
@@ -4330,7 +4467,6 @@ class MainWindow(qt.QMainWindow):
             if self.function_wheel_overlay is not None:
                 # Save the currently focused widget
                 focused_widget = self._parent.get_window_by_child_tab()
-                focused_tab = self._parent.get_tab_by_focus()
                 if focused_widget is None:
                     focused_widget = self._parent.get_window_by_focus()
                 # Store the last focused widget and tab
@@ -4403,8 +4539,8 @@ QSplitter::handle {{
 {}
 {}
             """.format(
-                data.theme["form"],
-                data.theme["form"],
+                settings.get_theme()["form"],
+                settings.get_theme()["form"],
                 StyleSheetScrollbar.full(),
                 StyleSheetButton.standard(),
                 StyleSheetMenu.standard(),
@@ -4421,17 +4557,16 @@ QSplitter::handle {{
             self._parent.setStyleSheet(style_sheet)
             self._parent.menubar.update_style()
             Menu.update_styles()
-            #            self._parent.repl_box.indication_reset()
             self.indication_check()
 
         def indicate_window(self):
-            style_sheet = self.init_style_sheet()
             # Windows
             windows = self._parent.get_all_windows()
             for w in windows:
                 w.style().unpolish(w)
                 w.style().polish(w)
                 w.repaint()
+                functions.process_events()
 
             data.signal_dispatcher.update_title.emit()
 
@@ -4513,7 +4648,7 @@ QSplitter::handle {{
                     if hasattr(window.widget(i), "refresh_lexer") == True:
                         window.widget(i).refresh_lexer()
                     elif hasattr(window.widget(i), "set_theme") == True:
-                        window.widget(i).set_theme(data.theme)
+                        window.widget(i).set_theme(settings.get_theme())
             self._parent.repl_helper.refresh_lexer()
             self.reset_entire_style_sheet()
             self._parent.statusbar.setStyleSheet(
@@ -4560,7 +4695,7 @@ QSplitter::handle {{
             classes = {
                 "CustomEditor": CustomEditor,
                 "PlainEditor": PlainEditor,
-                data.repl_messages_tab_name: PlainEditor,
+                constants.SpecialTabNames.Messages.value: PlainEditor,
                 "TreeDisplay": TreeDisplay,
                 "TreeExplorer": TreeExplorer,
                 "HexView": HexView,
@@ -4645,7 +4780,6 @@ QSplitter::handle {{
 
         def layout_restore(self, json_layout, pre_stored_widgets=None):
             main_form = self._parent
-            main_groupbox = self._parent.main_groupbox
             main_form.display.repl_suppress()
             # Class name storage
             classes, inverted_classes = self.get_layout_classes()
@@ -4671,8 +4805,6 @@ QSplitter::handle {{
 
             main_box = self._parent.main_box
             main_box.clear_all()
-
-            #            self._parent._print_all_boxes_and_windows()
 
             def create_box(parent, box):
                 for k, v in sorted(box.items()):
@@ -4732,7 +4864,6 @@ QSplitter::handle {{
                                 continue
 
                             if cls in classes.keys():
-
                                 if cls == "CustomEditor":
                                     file = key
                                     if isinstance(class_string, tuple) or isinstance(
@@ -4752,14 +4883,12 @@ QSplitter::handle {{
                                                 first_visible_line
                                             )
 
-                                #                                elif cls == "Console":
-                                #                                    new_tabs.console_add(key)
-
                                 elif cls == "TreeExplorer":
                                     directory_path = widget_data[0]
                                     if os.path.isdir(directory_path):
                                         file_explorer = new_tabs.tree_add_tab(
-                                            data.file_explorer_tab_name, TreeExplorer
+                                            constants.SpecialTabNames.FileExplorer.value,
+                                            TreeExplorer,
                                         )
                                         file_explorer.display_directory(directory_path)
                                         file_explorer.open_file_signal.connect(
@@ -4775,7 +4904,7 @@ QSplitter::handle {{
                                 elif cls == "HexView":
                                     file_path = widget_data[0]
                                     if os.path.isfile(file_path):
-                                        new_hexview = new_tabs.hexview_add(file_path)
+                                        new_tabs.hexview_add(file_path)
 
                                 elif cls == "Terminal":
                                     new_terminal = new_tabs.terminal_add()
@@ -4785,10 +4914,10 @@ QSplitter::handle {{
                                     ):
                                         new_terminal.set_cwd(working_path)
 
-                                elif cls == data.repl_messages_tab_name:
+                                elif cls == constants.SpecialTabNames.Messages.value:
                                     self._parent.repl_messages_tab = (
                                         new_tabs.plain_add_document(
-                                            data.repl_messages_tab_name
+                                            constants.SpecialTabNames.Messages.value
                                         )
                                     )
                                     rmt = self._parent.repl_messages_tab
@@ -4813,14 +4942,11 @@ QSplitter::handle {{
             main_form.display.repl_unsuppress()
 
         def layout_save(self, *args, _async=True):
-
             def save(*args, **kwargs):
                 try:
                     if _async:
                         self.layout_save_timer.stop()
-                    layout = self.layout_generate()
-                #                    file_path = "unknown"
-                #                    functions.write_to_file(layout, file_path)
+                    self.layout_generate()
                 except:
                     self._parent.display.repl_display_error(traceback.format_exc())
 
@@ -5430,8 +5556,8 @@ QSplitter::handle {{
             Initialization of the theme indicator in the statusbar
             """
             self.theme_indicator = ThemeIndicator(self._parent.statusbar, self._parent)
-            self.theme_indicator.set_image(data.theme["image-file"])
-            self.theme_indicator.setToolTip(data.theme["tooltip"])
+            self.theme_indicator.set_image(settings.get_theme()["image-file"])
+            self.theme_indicator.setToolTip(settings.get_theme()["tooltip"])
             self.theme_indicator.restyle()
             self._parent.statusbar.addPermanentWidget(self.theme_indicator)
 
@@ -5440,8 +5566,8 @@ QSplitter::handle {{
             if self.theme_indicator is None:
                 return
             # Set the theme icon and tooltip
-            self.theme_indicator.set_image(data.theme["image-file"])
-            self.theme_indicator.setToolTip(data.theme["tooltip"])
+            self.theme_indicator.set_image(settings.get_theme()["image-file"])
+            self.theme_indicator.setToolTip(settings.get_theme()["tooltip"])
             self.theme_indicator.restyle()
 
         def init_repl_indicator(self):
@@ -5541,12 +5667,12 @@ QSplitter::handle {{
                 parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STYLESETFONT,
                     lexer_number,
-                    data.current_editor_font_name.encode("utf-8"),
+                    settings.get("current_editor_font_name").encode("utf-8"),
                 )
                 parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STYLESETSIZE,
                     lexer_number,
-                    data.current_editor_font_size,
+                    settings.get("current_editor_font_size"),
                 )
                 parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STYLESETBOLD, lexer_number, True
@@ -5562,7 +5688,7 @@ QSplitter::handle {{
                 parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STYLESETBACK,
                     lexer_number,
-                    qt.QColor(data.theme["fonts"]["default"]["background"]),
+                    qt.QColor(settings.get_theme()["fonts"]["default"]["background"]),
                 )
                 parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STARTSTYLING, start, lexer_number
@@ -5578,7 +5704,7 @@ QSplitter::handle {{
             # Create a new REPL tab in the lower basic widget if it doesn't exist
             if parent.repl_messages_tab is None:
                 parent.repl_messages_tab = parent.get_repl_window().plain_add_document(
-                    data.repl_messages_tab_name
+                    constants.SpecialTabNames.Messages.value
                 )
                 rmt = parent.repl_messages_tab
                 rmt.internals.set_icon(rmt, self.repl_messages_icon)
@@ -5618,27 +5744,42 @@ QSplitter::handle {{
                 # THE MESSAGE COLORS ARE: 0xBBGGRR (BB-blue,GG-green,RR-red)
                 if message_type == constants.MessageType.ERROR:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["error"]["color"], 1
+                        start, end, settings.get_theme()["fonts"]["error"]["color"], 1
                     )
                 elif message_type == constants.MessageType.WARNING:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["warning"]["color"], 2
+                        start,
+                        end,
+                        settings.get_theme()["fonts"]["warning"]["color"],
+                        2,
                     )
                 elif message_type == constants.MessageType.SUCCESS:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["success"]["color"], 3
+                        start,
+                        end,
+                        settings.get_theme()["fonts"]["success"]["color"],
+                        3,
                     )
                 elif message_type == constants.MessageType.DIFF_UNIQUE_1:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["diff-unique-1"]["color"], 4
+                        start,
+                        end,
+                        settings.get_theme()["fonts"]["diff-unique-1"]["color"],
+                        4,
                     )
                 elif message_type == constants.MessageType.DIFF_UNIQUE_2:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["diff-unique-2"]["color"], 5
+                        start,
+                        end,
+                        settings.get_theme()["fonts"]["diff-unique-2"]["color"],
+                        5,
                     )
                 elif message_type == constants.MessageType.DIFF_SIMILAR:
                     style_repl_text(
-                        start, end, data.theme["fonts"]["diff-similar"]["color"], 6
+                        start,
+                        end,
+                        settings.get_theme()["fonts"]["diff-similar"]["color"],
+                        6,
                     )
             else:
                 # Add REPL message to the REPL message tab
@@ -5669,6 +5810,8 @@ QSplitter::handle {{
                         return
                     if qt.sip.isdeleted(rmt._parent):
                         return
+                    if parent.repl_messages_tab is None:
+                        return
                     rmt.setCursorPosition(parent.repl_messages_tab.lines(), 0)
                     rmt.setFirstVisibleLine(parent.repl_messages_tab.lines())
 
@@ -5693,7 +5836,7 @@ QSplitter::handle {{
                 self._parent.repl_messages_tab.SendScintilla(
                     qt.QsciScintillaBase.SCI_STYLECLEARALL
                 )
-                self._parent.repl_messages_tab.set_theme(data.theme)
+                self._parent.repl_messages_tab.set_theme(settings.get_theme())
                 # Bring the REPL tab to the front
                 self._parent.repl_messages_tab._parent.setCurrentWidget(
                     self._parent.repl_messages_tab
@@ -5703,7 +5846,7 @@ QSplitter::handle {{
             """Find the "REPL Message" tab in the basic widgets of the MainForm"""
             # Call the MainForm function to find the repl tab by name
             self._parent.repl_messages_tab = self._parent.get_tab_by_name(
-                data.repl_messages_tab_name
+                constants.SpecialTabNames.Messages.value
             )
             return self._parent.repl_messages_tab
 
@@ -5845,7 +5988,7 @@ QSplitter::handle {{
                         custom_editor.text(),
                         parser,
                     )
-                except Exception as ex:
+                except:
                     parent.display.repl_display_error(traceback.format_exc())
                     return
                 # Display the information in the tree tab
@@ -5960,7 +6103,7 @@ QSplitter::handle {{
                 init_space = "    -"
                 extra_space = "     "
                 # Display document name, used for finding the tab when clicking the hotspot
-                document_name = os.path.basename(custom_editor.save_name)
+                document_name = os.path.basename(custom_editor.save_path)
                 document_text = "DOCUMENT: {}\n".format(document_name)
                 parent.node_tree_tab.append(document_text)
                 parent.node_tree_tab.append("TYPE: {}\n\n".format(parser))
@@ -5998,7 +6141,7 @@ QSplitter::handle {{
                 init_space = "    -"
                 extra_space = "     "
                 # Display document name, used for finding the tab when clicking the hotspot
-                document_name = os.path.basename(custom_editor.save_name)
+                document_name = os.path.basename(custom_editor.save_path)
                 document_text = "DOCUMENT: {}\n".format(document_name)
                 parent.node_tree_tab.append(document_text)
                 parent.node_tree_tab.append("TYPE: {}\n\n".format(parser))
@@ -6235,9 +6378,8 @@ QSplitter::handle {{
         def show_session_editor(self):
             """Display a window for editing sessions"""
             # Create the SessionGuiManipulator
-            settings_manipulator = self._parent.settings.manipulator
             sessions_manipulator = SessionGuiManipulator(
-                settings_manipulator, self._parent.get_helper_window(), self._parent
+                self._parent.get_helper_window(), self._parent
             )
             # Find the old "SESSIONS" tab in the basic widgets and close it
             sessions_tab_name = "SESSIONS"
@@ -6890,7 +7032,7 @@ QSplitter::handle {{
 
         # Class varibles
         _parent = None
-        filesystem_watcher = None
+        path_watcher = None
 
         def __init__(self, parent):
             """
@@ -6900,25 +7042,51 @@ QSplitter::handle {{
             self._parent = parent
 
             # Initialize the file-system watcher
-            self.filesystem_watcher = qt.QFileSystemWatcher(parent)
-            self.filesystem_watcher.fileChanged.connect(self.__file_changed)
-            self.filesystem_watcher.directoryChanged.connect(self.__directory_changed)
-            data.signal_dispatcher.editor_initialized.connect(self.filewatcher_add)
-            data.signal_dispatcher.editor_deleted.connect(self.filewatcher_remove)
+            self.path_watcher = PathWatcher()
+            self.path_watcher.file_changed.connect(self.__file_change_handler)
+            data.signal_dispatcher.editor_initialized.connect(self.pathwatcher_add)
+            data.signal_dispatcher.editor_deleted.connect(self.pathwatcher_remove)
 
-        def __file_changed(self, path: str) -> None:
-            print("__file_changed", path)
+        def __file_change_handler(
+            self,
+            event_type: FileEvent,
+            source: str,
+            destination: Optional[str],
+            modification_time: Optional[float],
+        ):
+            """Handle all file events with consistent signature."""
 
-        def __directory_changed(self, path: str) -> None:
-            print("__directory_changed", path)
+            match event_type:
+                case FileEvent.CREATED:
+                    print(f"File created: {source}")
 
-        def filewatcher_add(self, path: str) -> bool:
-            return self.filesystem_watcher.addPath(path)
+                case FileEvent.MODIFIED:
+                    print(f"File modified: {source}")
+                    if os.path.isfile(source):
+                        editors = self._parent.get_all_editors()
+                        for e in editors:
+                            if not os.path.isfile(e.save_path):
+                                continue
+                            if os.path.samefile(e.save_path, source):
+                                if e.modification_time != modification_time:
+                                    e.reload_file()
 
-        def filewatcher_remove(self, path: str) -> bool:
-            return self.filesystem_watcher.removePath(path)
+                case FileEvent.DELETED:
+                    print(f"File deleted: {source}")
 
-        def pretty_print_text(self, _type: constants.FormatterType) -> None:
+                case FileEvent.MOVED:
+                    print(f"File moved from {source} to {destination}")
+
+                case _:
+                    raise Exception(f"Unknown FileEvent: {event_type}")
+
+        def pathwatcher_add(self, path: str) -> bool:
+            return self.path_watcher.add_file(path)
+
+        def pathwatcher_remove(self, path: str) -> bool:
+            return self.path_watcher.remove_file(path)
+
+        def pretty_print_text(self, _type: constants.FormatterType, **kwargs) -> None:
             tab = self._parent.get_tab_by_indication()
 
             if not hasattr(tab, "text"):
@@ -6928,17 +7096,21 @@ QSplitter::handle {{
                 return
 
             if _type == constants.FormatterType.JSON:
-                prettyfied_string = functions.pretty_print_json(tab.text())
+                prettyfied_string = components.codequality.pretty_print_json(
+                    tab.text(), **kwargs
+                )
             elif _type == constants.FormatterType.XML:
-                prettyfied_string = functions.pretty_print_xml(tab.text())
+                prettyfied_string = components.codequality.pretty_print_xml(
+                    tab.text(), **kwargs
+                )
             elif _type == constants.FormatterType.HTML_Python_Standard_Library:
-                prettyfied_string = functions.pretty_print_html_python_stdlib(
-                    tab.text()
+                prettyfied_string = (
+                    components.codequality.pretty_print_html_python_stdlib(tab.text())
                 )
             elif _type == constants.FormatterType.HTML_BeautifulSoup:
                 prettyfied_string = (
-                    libraryfunctions.custom_format_html_document_beautifulsoup(
-                        tab.text()
+                    components.codequality.custom_format_html_document_beautifulsoup(
+                        tab.text(), **kwargs
                     )
                 )
             else:
@@ -6962,7 +7134,7 @@ QSplitter::handle {{
             cursor_line, cursor_index = tab.getCursorPosition()
             code = tab.text()
 
-            formatted_code = libraryfunctions.format_python_code(code, library)
+            formatted_code = components.codequality.format_python_code(code, library)
 
             tab.set_all_text(formatted_code)
 
@@ -6979,13 +7151,13 @@ QSplitter::handle {{
                 return
             elif not tab.hasSelectedText():
                 self._parent.display.repl_display_error(
-                    f"No text selected in the editor!)"
+                    "No text selected in the editor!)"
                 )
                 return
 
             code = tab.selectedText()
 
-            formatted_code = libraryfunctions.format_python_code(code, library)
+            formatted_code = components.codequality.format_python_code(code, library)
 
             tab.replaceSelectedText(formatted_code)
 
@@ -7005,7 +7177,9 @@ QSplitter::handle {{
             code = tab.text()
 
             if library == "clang-format":
-                formatted_code = functions.format_c_cpp(source_code=code, style=style)
+                formatted_code = components.codequality.format_clangformat_c_cpp(
+                    source_code=code, style=style
+                )
 
             else:
                 raise Exception(
@@ -7032,9 +7206,73 @@ QSplitter::handle {{
             cursor_line, cursor_index = tab.getCursorPosition()
             code = tab.text()
 
-            formatted_code = functions.format_zig_code(zig_code_string=code)
+            formatted_code = components.codequality.format_zig_code(
+                zig_code_string=code
+            )
 
             tab.set_all_text(formatted_code)
 
             tab.setCursorPosition(cursor_line, cursor_index)
             tab.setFirstVisibleLine(first_line)
+        
+        def format_nim_file(
+            self,
+        ) -> None:
+            tab = self._parent.get_tab_by_indication()
+
+            if not hasattr(tab, "save_path"):
+                self._parent.display.repl_display_error(
+                    f"Indicated tab is not an editor! ('{tab.__class__.__name__}')"
+                )
+                return
+
+            first_line = tab.firstVisibleLine()
+            cursor_line, cursor_index = tab.getCursorPosition()
+            nim_file_path = tab.save_path
+
+            formatted_code = components.codequality.format_nim_file(
+                file_path=nim_file_path
+            )
+
+            tab.setCursorPosition(cursor_line, cursor_index)
+            tab.setFirstVisibleLine(first_line)
+
+        def analyze_python_file(self, library: str) -> None:
+            tab = self._parent.get_tab_by_indication()
+
+            if not hasattr(tab, "save_path"):
+                self._parent.display.repl_display_error(
+                    f"Indicated tab is not an editor! ('{tab.__class__.__name__}')"
+                )
+                return
+
+            file_path = tab.save_path
+
+            if library == "ruff":
+                exit_code, analysis_results_or_error = (
+                    components.codequality.analyze_ruff_file(file_path)
+                )
+                if exit_code != 0:
+                    self._parent.display.repl_display_message("Ruff results:")
+                    self._parent.display.repl_display_message(analysis_results_or_error)
+                else:
+                    self._parent.display.repl_display_success(
+                        "Ruff says everything is ok."
+                    )
+
+            elif library == "pyflakes":
+                exit_code, stdout, stderr = (
+                    components.codequality.analyze_pyflakes_file(file_path)
+                )
+                if exit_code != 0:
+                    self._parent.display.repl_display_message("Pyflakes results:")
+                    self._parent.display.repl_display_message(stdout)
+                else:
+                    self._parent.display.repl_display_success(
+                        "Pyflakes says everything is ok."
+                    )
+
+            else:
+                raise Exception(
+                    f"[PYTHON-ANALYZING] Unknown analyzer library selected: '{library}'"
+                )

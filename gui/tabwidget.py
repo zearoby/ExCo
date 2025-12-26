@@ -16,23 +16,18 @@ import constants
 import data
 import functions
 import qt
+import settings
 
-from .custombuttons import *
-from .customeditor import *
-from .dialogs import *
-from .externalprogram import *
-from .hexview import *
-from .menu import *
-from .plaineditor import *
-from .templates import *
-from .terminal import *
-from .treedisplays import *
-
-"""
------------------------------
-Subclassed QTabWidget that can hold all custom editor and other widgets
------------------------------
-"""
+from gui.custombuttons import *
+from gui.customeditor import *
+from gui.dialogs import *
+from gui.externalprogram import *
+from gui.hexview import *
+from gui.menu import *
+from gui.plaineditor import *
+from gui.templates import *
+from gui.terminal import *
+from gui.treedisplays import *
 
 
 class TabWidget(qt.QTabWidget):
@@ -65,26 +60,28 @@ class TabWidget(qt.QTabWidget):
             # Set style
             self.set_style()
             # Set default font
-            self.setFont(data.get_current_font())
+            self.setFont(settings.get_current_font())
             # Don't draw the background, only the tabs
             self.setDrawBase(False)
 
         def set_style(self):
-            close_image = functions.get_resource_file(data.theme["close-image"])
+            close_image = functions.get_resource_file(
+                settings.get_theme()["close-image"]
+            )
             close_hover_image = functions.get_resource_file(
-                data.theme["close-hover-image"]
+                settings.get_theme()["close-hover-image"]
             )
             right_arrow_image = functions.get_resource_file(
-                data.theme["right-arrow-image"]
+                settings.get_theme()["right-arrow-image"]
             )
             right_arrow_hover_image = functions.get_resource_file(
-                data.theme["right-arrow-hover-image"]
+                settings.get_theme()["right-arrow-hover-image"]
             )
             left_arrow_image = functions.get_resource_file(
-                data.theme["left-arrow-image"]
+                settings.get_theme()["left-arrow-image"]
             )
             left_arrow_hover_image = functions.get_resource_file(
-                data.theme["left-arrow-hover-image"]
+                settings.get_theme()["left-arrow-hover-image"]
             )
             style = """
 QTabBar::close-button {{
@@ -139,15 +136,15 @@ QTabBar::tab:selected {{
                 right_arrow_hover_image,
                 left_arrow_image,
                 left_arrow_hover_image,
-                data.theme["indication"]["passivebackground"],
-                data.theme["indication"]["passiveborder"],
-                data.theme["indication"]["passivebackground"],
-                data.theme["fonts"]["default"]["color"],
-                data.theme["indication"]["hover"],
-                data.theme["indication"]["hover"],
-                data.theme["indication"]["activebackground"],
-                data.theme["indication"]["activeborder"],
-                data.theme["indication"]["passivebackground"],
+                settings.get_theme()["indication"]["passivebackground"],
+                settings.get_theme()["indication"]["passiveborder"],
+                settings.get_theme()["indication"]["passivebackground"],
+                settings.get_theme()["fonts"]["default"]["color"],
+                settings.get_theme()["indication"]["hover"],
+                settings.get_theme()["indication"]["hover"],
+                settings.get_theme()["indication"]["activebackground"],
+                settings.get_theme()["indication"]["activeborder"],
+                settings.get_theme()["indication"]["passivebackground"],
             )
             self.setStyleSheet(style)
 
@@ -187,7 +184,7 @@ QTabBar::tab:selected {{
             # Nested function for updating the current working directory
             def update_cwd():
                 # Get the document path
-                path = os.path.dirname(widget.save_name)
+                path = os.path.dirname(widget.save_path)
                 # Check if the path is not an empty string
                 if path == "":
                     message = "Document path is not valid!"
@@ -208,7 +205,7 @@ QTabBar::tab:selected {{
             )
             clear_repl_action.triggered.connect(main_form.display.repl_clear_tab)
 
-            if hasattr(widget, "save_name") == True:
+            if hasattr(widget, "save_path") == True:
                 update_cwd_action = qt.QAction("Update CWD", self)
                 update_cwd_action.setIcon(
                     functions.create_icon("tango_icons/update-cwd.png")
@@ -238,7 +235,7 @@ QTabBar::tab:selected {{
                 def clipboard_path_copy():
                     cb = data.application.clipboard()
                     cb.clear(mode=cb.Mode.Clipboard)
-                    cb.setText(widget.save_name, mode=cb.Mode.Clipboard)
+                    cb.setText(widget.save_path, mode=cb.Mode.Clipboard)
 
                 clipboard_copy_path_action.setIcon(
                     functions.create_icon("tango_icons/edit-copy.png")
@@ -266,7 +263,7 @@ QTabBar::tab:selected {{
             if self.__check_for_editor(tab_widget):
                 # Open in Hex-View
                 def open_hex():
-                    file_path = widget.save_name
+                    file_path = widget.save_path
                     main_form.open_file_hex(file_path)
 
                 action_open_hex = qt.QAction("Open with Hex-View", self)
@@ -278,7 +275,7 @@ QTabBar::tab:selected {{
                 open_in_explorer_action = qt.QAction("Open document in explorer", self)
 
                 def open_in_explorer():
-                    path = widget.save_name
+                    path = widget.save_path
                     try:
                         result = functions.open_item_in_explorer(path)
                     except:
@@ -373,7 +370,9 @@ QTabBar::tab:selected {{
     # Custom tab bar
     custom_tab_bar = None
     # Default font for textboxes
-    default_editor_font = qt.QFont(data.current_font_name, data.current_font_size)
+    default_editor_font = qt.QFont(
+        settings.get("current_font_name"), settings.get("current_font_size")
+    )
     # Default font and icon size for the tab bar
     default_tab_font = None
     default_icon_size = None
@@ -395,7 +394,7 @@ QTabBar::tab:selected {{
         self.main_form = main_form
         self.box = box
         # Set default font
-        self.setFont(data.get_current_font())
+        self.setFont(settings.get_current_font())
         # Initialize the custom tab bar
         self.custom_tab_bar = self.CustomTabBar(self)
         self.setTabBar(self.custom_tab_bar)
@@ -416,14 +415,17 @@ QTabBar::tab:selected {{
         self.tabBar().installEventFilter(self)
 
     def customize_tab_bar(self):
-        if data.custom_menu_scale != None and data.custom_menu_font != None:
-            self.tabBar().setFont(qt.QFont(*data.custom_menu_font))
+        if (
+            settings.get("custom_menu_scale") != None
+            and settings.get("custom_menu_font") != None
+        ):
+            self.tabBar().setFont(qt.QFont(*settings.get("custom_menu_font")))
             new_icon_size = functions.create_size(
-                data.custom_menu_scale, data.custom_menu_scale
+                settings.get("custom_menu_scale"), settings.get("custom_menu_scale")
             )
             self.setIconSize(new_icon_size)
         else:
-            self.tabBar().setFont(data.get_current_font())
+            self.tabBar().setFont(settings.get_current_font())
             self.setIconSize(self.default_icon_size)
         self.tabBar().set_style()
 
@@ -571,8 +573,12 @@ QTabBar::tab:selected {{
                 name = TabWidget.drag_event_data["name"]
                 index = TabWidget.drag_event_data["index"]
                 source = TabWidget.drag_event_data["source"]
-                self.drag_tab_in(source, index)
+                # Qt's drag-and-drop cleanup is asynchronous. Modifying the widget hierarchy
+                # immediately causes paint errors because Qt is still finalizing the drop.
+                # Delay ensures cleanup completes before we move tabs around.
+                qt.QTimer.singleShot(50, lambda: self.drag_tab_in(source, index))
                 event.accept()
+                self.update()
                 TabWidget.drag_event_data = None
             else:
                 event.ignore()
@@ -778,17 +784,17 @@ QTabBar::tab:selected {{
         if self.count() == 0:
             self.main_form.set_save_file_state(False)
 
-    def _signal_text_changed(self):
+    def _signal_text_changed(self, widget: qt.QWidget):
         """Signal that is emmited when the document text changes"""
         # Check if the current widget is valid
-        if self.currentWidget() == None:
+        if widget is None:
             return
         # Update the save status of the current widget
-        if self.currentWidget().savable == constants.CanSave.YES:
+        if widget.savable == constants.CanSave.YES:
             # Set document as modified
-            self.currentWidget().save_status = constants.FileStatus.MODIFIED
+            widget.save_status = constants.FileStatus.MODIFIED
             # Check if special character is already in the name of the tab
-            self.set_text_changed(self.currentIndex())
+            self.set_text_changed(self.indexOf(widget))
         # Update margin width
         self.editor_update_margin()
 
@@ -814,8 +820,10 @@ QTabBar::tab:selected {{
                 parent=lbl,
             )
             movie.setCacheMode(qt.QMovie.CacheMode.CacheAll)
-            if data.custom_menu_scale != None:
-                size = tuple([(x * data.custom_menu_scale / 16) for x in (16, 16)])
+            if settings.get("custom_menu_scale") != None:
+                size = tuple(
+                    [(x * settings.get("custom_menu_scale") / 16) for x in (16, 16)]
+                )
             else:
                 size = (16, 16)
             movie.setScaledSize(functions.create_size(*size))
@@ -1110,14 +1118,14 @@ QTabBar::tab:selected {{
             return
         # Check if the source file already exists in the target basic widget
         check_tab_widget, check_index = self.main_form.check_open_file(
-            source_widget.save_name
+            source_widget.save_path
         )
         if check_index is not None and check_tab_widget is self:
             # File is already open, focus it
             self.setCurrentIndex(check_index)
             return
         # Create a new editor document
-        new_widget = self.editor_create_document(source_widget.save_name)
+        new_widget = self.editor_create_document(source_widget.save_path)
         # Add the copied custom editor to the target basic widget
         new_index = self.addTab(
             new_widget,
@@ -1147,7 +1155,7 @@ QTabBar::tab:selected {{
         if isinstance(moved_widget, CustomEditor) == True:
             # Check if the source file already exists in the target basic widget
             check_tab_widget, check_index = self.main_form.check_open_file(
-                moved_widget.save_name
+                moved_widget.save_path
             )
             if check_index is not None and check_tab_widget is self:
                 # File is already open, focus it
@@ -1186,7 +1194,7 @@ QTabBar::tab:selected {{
             # Check if the source file already exists
             # in the target basic widget
             check_tab_widget, check_index = self.main_form.check_open_file(
-                dragged_widget.save_name
+                dragged_widget.save_path
             )
             if check_index is not None and check_tab_widget is self:
                 # File is already open, focus it
@@ -1251,8 +1259,8 @@ QTabBar::tab:selected {{
             close_button.setIcon(functions.create_icon("various/close.png"))
             close_button.setIconSize(
                 qt.QSize(
-                    int(data.tree_display_icon_size * 2),
-                    int(data.tree_display_icon_size * 2),
+                    int(settings.get("tree_display_icon_size") * 2),
+                    int(settings.get("tree_display_icon_size") * 2),
                 )
             )
             tooltip = "Close this box"

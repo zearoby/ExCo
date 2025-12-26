@@ -9,28 +9,21 @@ For complete license information of the dependencies, check the 'additional_lice
 import os
 import re
 
-import qt
-import data
-import constants
 import components.actionfilter
-import components.internals
 import components.hotspots
+import components.internals
 import components.linelist
 import components.thesquid
+import constants
+import data
 import functions
-import settings
 import lexers
+import qt
+import settings
 
 import gui.contextmenu
-from .dialogs import *
-from .baseeditor import *
-
-
-"""
----------------------------------------------
-Subclassed QScintilla widget used for editing
----------------------------------------------
-"""
+from gui.baseeditor import BaseEditor
+from gui.dialogs import YesNoDialog
 
 
 class CustomEditor(BaseEditor):
@@ -47,10 +40,11 @@ class CustomEditor(BaseEditor):
     _parent = None
     main_form = None
     name = ""
-    save_name = ""
+    save_path = ""
     save_status = constants.FileStatus.OK
     savable = constants.CanSave.NO
     embedded = False
+    modification_time = None
     # Current document type, initialized to text
     current_file_type = "TEXT"
     # Current tab icon
@@ -125,7 +119,8 @@ class CustomEditor(BaseEditor):
             pass
 
         # Signal file initialization
-        data.signal_dispatcher.editor_deleted.emit(self.save_name)
+        if not qt.sip.isdeleted(data.signal_dispatcher):
+            data.signal_dispatcher.editor_deleted.emit(self.save_path)
 
     def __init__(self, parent, main_form, file_with_path=None):
         """
@@ -138,18 +133,23 @@ class CustomEditor(BaseEditor):
         self.setUtf8(True)
         # Set font family and size
         self.setFont(
-            qt.QFont(data.current_editor_font_name, data.current_editor_font_size)
+            qt.QFont(
+                settings.get("current_editor_font_name"),
+                settings.get("current_editor_font_size"),
+            )
         )
         # Set the margin type (0 is by default line numbers, 1 is for non code folding symbols and 2 is for code folding)
         self.setMarginType(0, qt.QsciScintilla.MarginType.NumberMargin)
         # Set margin width and font
         self.setMarginWidth(0, "00")
-        self.setMarginsFont(data.get_editor_font())
+        self.setMarginsFont(settings.get_editor_font())
         # Reset the modified status of the document
         self.setModified(False)
         # Set brace matching
         self.setBraceMatching(qt.QsciScintilla.BraceMatch.SloppyBraceMatch)
-        self.setMatchedBraceBackgroundColor(qt.QColor(settings.editor["brace_color"]))
+        self.setMatchedBraceBackgroundColor(
+            qt.QColor(settings.get("editor")["brace_color"])
+        )
         # Autoindentation enabled when using "Enter" to indent to the same level as the previous line
         self.setAutoIndent(True)
         # Tabs are spaces by default
@@ -160,15 +160,17 @@ class CustomEditor(BaseEditor):
         except:
             pass
         # Set tab space indentation width
-        self.setTabWidth(settings.editor["tab_width"])
+        self.setTabWidth(settings.get("editor")["tab_width"])
         # Set backspace to delete by tab widths
         self.setBackspaceUnindents(True)
         # Scintilla widget must not accept drag/drop events, the cursor freezes if it does!!!
         self.setAcceptDrops(False)
         # Set line endings to be Unix style ("\n")
-        self.setEolMode(qt.QsciScintilla.EolMode(settings.editor["end_of_line_mode"]))
+        self.setEolMode(
+            qt.QsciScintilla.EolMode(settings.get("editor")["end_of_line_mode"])
+        )
         # Set the initial zoom factor
-        self.zoomTo(settings.editor["zoom_factor"])
+        self.zoomTo(settings.get("editor")["zoom_factor"])
         # Set multi-paste
         self.SendScintilla(self.SCI_SETMULTIPASTE, self.SC_MULTIPASTE_EACH)
         # Correct the file name if it is unspecified
@@ -180,12 +182,12 @@ class CustomEditor(BaseEditor):
         self.name = os.path.basename(file_with_path)
         # Set save name with path
         if os.path.dirname(file_with_path) != "":
-            self.save_name = file_with_path
+            self.save_path = file_with_path
         else:
-            self.save_name = ""
+            self.save_path = ""
         # Replace back-slashes to forward-slashes on Windows
         if data.platform == "Windows":
-            self.save_name = self.save_name.replace("\\", "/")
+            self.save_path = self.save_path.replace("\\", "/")
         # Reset the file save status
         self.save_status = constants.FileStatus.OK
         # Enable saving of the scintilla document
@@ -223,15 +225,17 @@ class CustomEditor(BaseEditor):
         self.bookmarks = Bookmarks(self)
         self.keyboard = Keyboard(self)
         # Set cursor line visibility and color
-        self.set_cursor_line_visibility(settings.editor["cursor_line_visible"])
+        self.set_cursor_line_visibility(settings.get("editor")["cursor_line_visible"])
         # Make last line scrollable to the top
         self.SendScintilla(self.SCI_SETENDATLASTLINE, False)
         # Enable multiple cursors and multi-cursor typing
         self.SendScintilla(self.SCI_SETMULTIPLESELECTION, True)
         self.SendScintilla(self.SCI_SETADDITIONALSELECTIONTYPING, True)
 
+        self.update_variable_settings()
+
         # Signal file initialization
-        data.signal_dispatcher.editor_initialized.emit(self.save_name)
+        data.signal_dispatcher.editor_initialized.emit(self.save_path)
 
     def __setattr__(self, name, value):
         """
@@ -254,6 +258,66 @@ class CustomEditor(BaseEditor):
                 return
         # Call the superclasses/original __setattr__() special method
         super().__setattr__(name, value)
+
+    def update_variable_settings(self):
+        """These are global settings that are saved every time a setting is
+        changed."""
+        editor_settings = settings.get("editor")
+        # Autocompletion
+        if not self.isReadOnly():
+            self.set_autocompletion(editor_settings["autocompletion"])
+        else:
+            self.set_autocompletion(False)
+        # Word wrap
+        self.set_wordwrap(editor_settings["word_wrap"])
+        # Set font family and size
+        self.setFont(settings.get_editor_font())
+        # Set brace matching
+        self.setBraceMatching(qt.QsciScintilla.BraceMatch.SloppyBraceMatch)
+        self.setMatchedBraceBackgroundColor(qt.QColor(editor_settings["brace_color"]))
+        # Set tab space indentation width
+        self.setTabWidth(editor_settings["tab_width"])
+        # Set line endings to be Unix style ("\n")
+        self.setEolMode(qt.QsciScintilla.EolMode(editor_settings["end_of_line_mode"]))
+        # Set the initial zoom factor
+        self.zoomTo(editor_settings["zoom_factor"])
+        # Set cursor line visibility and color
+        self.set_cursor_line_visibility(editor_settings["cursor_line_visible"])
+        # Edge marker
+        if editor_settings["edge_marker_visible"]:
+            self.edge_marker_show()
+        else:
+            self.edge_marker_hide()
+        # Tabs use spaces
+        self.setIndentationsUseTabs(not editor_settings["tabs_use_spaces"])
+        # Visibility of whitespace characters
+        if editor_settings["whitespace_visible"]:
+            self.setWhitespaceVisibility(
+                qt.QsciScintilla.WhitespaceVisibility.WsVisible
+            )
+        else:
+            self.setWhitespaceVisibility(
+                qt.QsciScintilla.WhitespaceVisibility.WsInvisible
+            )
+        # Makefile special settings
+        if isinstance(self.lexer(), lexers.Makefile):
+            if editor_settings["makefile_uses_tabs"]:
+                self.setIndentationsUseTabs(True)
+            if editor_settings["makefile_whitespace_visible"]:
+                self.setWhitespaceVisibility(
+                    qt.QsciScintilla.WhitespaceVisibility.WsVisible
+                )
+        # Margin settings
+        self.setMarginsFont(
+            qt.QFont(
+                settings.get("current_editor_font_name"),
+                settings.get("current_editor_font_size"),
+                weight=qt.QFont.Weight.Bold,
+            )
+        )
+        self.update_margin()
+        # Update style
+        self.refresh_lexer()
 
     def __text_modified(
         self,
@@ -297,12 +361,6 @@ class CustomEditor(BaseEditor):
         # pressed_key = key_event.key()
         accept_keypress = False
         return accept_keypress
-
-    def _filter_keyrelease(self, key_event):
-        """Filter keyrelease for appropriate action"""
-        # released_key = key_event.key()
-        accept_keyrelease = False
-        return accept_keyrelease
 
     def _init_bookmark_marker(self):
         """Initialize the marker for the bookmarks"""
@@ -401,8 +459,6 @@ class CustomEditor(BaseEditor):
         # Filter out TAB and SHIFT+TAB key combinations to override
         # the default indent/unindent functionality
         key = event.key()
-        #        char = event.text()
-        #        key_modifiers = qt.QApplication.keyboardModifiers()
         if key == qt.Qt.Key.Key_Tab:
             self.custom_indent()
         elif key == qt.Qt.Key.Key_Backtab:
@@ -428,7 +484,7 @@ class CustomEditor(BaseEditor):
                     if stripped_line == "":
                         self.line_list[line_number] = (
                             self.line_list[line_number]
-                            + " " * settings.editor["tab_width"]
+                            + " " * settings.get("editor")["tab_width"]
                         )
                         self.setCursorPosition(
                             line_number - 1, len(self.line_list[line_number])
@@ -437,13 +493,14 @@ class CustomEditor(BaseEditor):
                         whitespace = len(line) - len(line.lstrip())
                         self.line_list[line_number] = (
                             " " * whitespace
-                            + " " * settings.editor["tab_width"]
+                            + " " * settings.get("editor")["tab_width"]
                             + stripped_line
                         )
                         # The line is not empty, move the cursor to the first
                         # non-whitespace character
                         self.setCursorPosition(
-                            line_number - 1, whitespace + settings.editor["tab_width"]
+                            line_number - 1,
+                            whitespace + settings.get("editor")["tab_width"],
                         )
         else:
             # Execute the superclass method first, the same trick as in __init__ !
@@ -457,8 +514,6 @@ class CustomEditor(BaseEditor):
         """
         # Execute the superclass method first, the same trick as in __init__ !
         super().keyReleaseEvent(event)
-        # Filter the event
-        self._filter_keyrelease(event)
 
     def mousePressEvent(self, event):
         """
@@ -516,7 +571,7 @@ class CustomEditor(BaseEditor):
         # Update the line count list with a list comprehention
         self.line_count = [line for line in range(1, self.lines() + 1)]
         # Execute the parent basic widget signal
-        self._parent._signal_text_changed()
+        self._parent._signal_text_changed(self)
 
     def setFocus(self):
         """Overridden focus event"""
@@ -955,7 +1010,7 @@ class CustomEditor(BaseEditor):
         Scintila indents line-by-line, which is very slow for a large amount of lines. Try indenting 20000 lines.
         This is a custom indentation function that indents all lines in one operation.
         """
-        tab_width = settings.editor["tab_width"]
+        tab_width = settings.get("editor")["tab_width"]
         # Check QScintilla's tab width
         if self.tabWidth() != tab_width:
             self.setTabWidth(tab_width)
@@ -1058,7 +1113,7 @@ class CustomEditor(BaseEditor):
         Scintila unindents line-by-line, which is very slow for a large amount of lines. Try unindenting 20000 lines.
         This is a custom unindentation function that unindents all lines in one operation.
         """
-        tab_width = settings.editor["tab_width"]
+        tab_width = settings.get("editor")["tab_width"]
         # Check QScintilla's tab width
         if self.tabWidth() != tab_width:
             self.setTabWidth(tab_width)
@@ -1538,10 +1593,10 @@ class CustomEditor(BaseEditor):
         # Setup the indicator style, the replace indicator is 1
         self.set_indicator("replace")
         # Correct the displayed file name
-        if self.save_name == None or self.save_name == "":
+        if self.save_path == None or self.save_path == "":
             file_name = self._parent.tabText(self._parent.currentIndex())
         else:
-            file_name = os.path.basename(self.save_name)
+            file_name = os.path.basename(self.save_path)
         # Check if there are any instances of the search text in the document
         # based on the regular expression flag
         search_result = None
@@ -1589,7 +1644,10 @@ class CustomEditor(BaseEditor):
                         )
                     )
                 # Display the replacements in the REPL tab
-                if len(corrected_matches) < settings.editor["maximum_highlights"]:
+                if (
+                    len(corrected_matches)
+                    < settings.get("editor")["maximum_highlights"]
+                ):
                     message = "{} replacements:".format(file_name)
                     self.main_form.display.repl_display_message(
                         message, message_type=constants.MessageType.SUCCESS
@@ -1613,7 +1671,7 @@ class CustomEditor(BaseEditor):
                 self.highlight_raw(corrected_matches)
             else:
                 # Display the replacements in the REPL tab
-                if len(matches) < settings.editor["maximum_highlights"]:
+                if len(matches) < settings.get("editor")["maximum_highlights"]:
                     message = "{} replacements:".format(file_name)
                     self.main_form.display.repl_display_message(
                         message, message_type=constants.MessageType.SUCCESS
@@ -1815,18 +1873,22 @@ class CustomEditor(BaseEditor):
         """
         if indicator == "highlight":
             self._set_indicator(
-                self.HIGHLIGHT_INDICATOR, data.theme["indication"]["highlight"]
+                self.HIGHLIGHT_INDICATOR,
+                settings.get_theme()["indication"]["highlight"],
             )
         elif indicator == "selection":
             self._set_indicator(
-                self.SELECTION_INDICATOR, data.theme["indication"]["selection"]
+                self.SELECTION_INDICATOR,
+                settings.get_theme()["indication"]["selection"],
             )
         elif indicator == "replace":
             self._set_indicator(
-                self.REPLACE_INDICATOR, data.theme["indication"]["replace"]
+                self.REPLACE_INDICATOR, settings.get_theme()["indication"]["replace"]
             )
         elif indicator == "find":
-            self._set_indicator(self.FIND_INDICATOR, data.theme["indication"]["find"])
+            self._set_indicator(
+                self.FIND_INDICATOR, settings.get_theme()["indication"]["find"]
+            )
         else:
             raise Exception("Unknown indicator: {}".format(indicator))
 
@@ -1852,35 +1914,35 @@ class CustomEditor(BaseEditor):
         """
         Save a document to a file
         """
-        if self.save_name == "" or saveas != False:
+        if self.save_path == "" or saveas != False:
             # Tab has an empty directory attribute or "SaveAs" was invoked, select file using the QFileDialog
             # Get the filename from the QFileDialog window
             tab_text = self._parent.tabText(self._parent.indexOf(self))
-            temp_save_name = qt.QFileDialog.getSaveFileName(
+            temp_save_path = qt.QFileDialog.getSaveFileName(
                 self,
                 "Save File: '{}'".format(tab_text),
-                os.getcwd() + self.save_name,
+                os.getcwd() + self.save_path,
                 "All Files(*)",
             )
             # PyQt6's getOpenFileNames returns a tuple (files_list, selected_filter),
             # so pass only the files to the function
-            temp_save_name = temp_save_name[0]
+            temp_save_path = temp_save_path[0]
             # Check if the user has selected a file
-            if temp_save_name == "":
+            if temp_save_path == "":
                 return False
             # Replace back-slashes to forward-slashes on Windows
             if data.platform == "Windows":
-                temp_save_name = functions.unixify_path(temp_save_name)
-            # Save the chosen file name to the document "save_name" attribute
-            self.save_name = temp_save_name
+                temp_save_path = functions.unixify_path(temp_save_path)
+            # Save the chosen file name to the document "save_path" attribute
+            self.save_path = temp_save_path
         # Set the tab name by filtering it out from the QFileDialog result
-        self.name = os.path.basename(self.save_name)
+        self.name = os.path.basename(self.save_path)
         # Change the displayed name of the tab in the basic widget
         self._parent.set_tab_name(self, self.name)
         # Check if a line ending was specified
         if line_ending == None:
             # Write contents of the tab into the specified file
-            save_result = functions.write_to_file(self.text(), self.save_name, encoding)
+            save_result = functions.write_to_file(self.text(), self.save_path, encoding)
         else:
             # The line ending has to be a string
             if isinstance(line_ending, str) == False:
@@ -1894,18 +1956,19 @@ class CustomEditor(BaseEditor):
                 text_list = self.line_list
                 converted_text = line_ending.join(text_list)
                 save_result = functions.write_to_file(
-                    converted_text, self.save_name, encoding
+                    converted_text, self.save_path, encoding
                 )
-        # Check result of the functions.write_to_file function
+
+        # Check save result
         if save_result == True:
             # Saving has succeded
             self.reset_text_changed()
             # Update the lexer for the document only if the lexer is not set
             if isinstance(self.lexer(), lexers.Text):
-                file_type = functions.get_file_type(self.save_name)
+                file_type = functions.get_file_type(self.save_path)
                 self.choose_lexer(file_type)
             # Update the settings manipulator with the new file
-            self.main_form.settings.update_recent_list(self.save_name)
+            self.main_form.settings.update_recent_list(self.save_path)
             return True
         else:
             # Saving has failed
@@ -1923,8 +1986,8 @@ class CustomEditor(BaseEditor):
         """
         Refresh the current lexer (used by themes)
         """
-        self.set_theme(data.theme)
-        self.lexer().set_theme(data.theme)
+        self.set_theme(settings.get_theme())
+        self.lexer().set_theme(settings.get_theme())
 
     def choose_lexer(self, file_type):
         """
@@ -1959,7 +2022,7 @@ class CustomEditor(BaseEditor):
         # Save the current file type to a string
         self.current_file_type = file_type.upper()
         # Set the lexer default font family
-        lexer.setDefaultFont(data.get_editor_font())
+        lexer.setDefaultFont(settings.get_editor_font())
         # Set the comment options
         result = lexers.get_comment_style_for_lexer(lexer)
         lexer.open_close_comment_style = result[0]
@@ -1981,7 +2044,7 @@ class CustomEditor(BaseEditor):
         self.SendScintilla(
             qt.QsciScintillaBase.SCI_STYLESETFONT,
             1,
-            data.current_editor_font_name.encode("utf-8"),
+            settings.get("current_editor_font_name").encode("utf-8"),
         )
         # Enable code folding for the file type
         self.setFolding(qt.QsciScintilla.FoldStyle.PlainFoldStyle)
@@ -1990,7 +2053,7 @@ class CustomEditor(BaseEditor):
         # Update the icon on the parent basic widget
         self.internals.update_icon(self)
         # Set the theme
-        self.set_theme(data.theme)
+        self.set_theme(settings.get_theme())
         # Update corner icons
         self.internals.update_corner_button_icon(self.current_icon)
         self.internals.update_icon(self)
@@ -2005,8 +2068,8 @@ class CustomEditor(BaseEditor):
         # Reset the brace matching color
         self.setBraceMatching(qt.QsciScintilla.BraceMatch.SloppyBraceMatch)
 
-    #        self.setMatchedBraceBackgroundColor(qt.QColor(settings.editor['brace_color']))
-    #        self.setMatchedBraceForegroundColor(data.theme["fonts"]["default"]["color"])
+    #        self.setMatchedBraceBackgroundColor(qt.QColor(settings.get("editor")['brace_color']))
+    #        self.setMatchedBraceForegroundColor(settings.get_theme()["fonts"]["default"]["color"])
 
     def clear_editor(self):
         """Clear the text from the scintilla document"""
@@ -2014,7 +2077,7 @@ class CustomEditor(BaseEditor):
 
     def tabs_to_spaces(self):
         """Convert all tab(\t) characters to spaces"""
-        spaces = " " * settings.editor["tab_width"]
+        spaces = " " * settings.get("editor")["tab_width"]
         self.setText(self.text().replace("\t", spaces))
 
     def undo_all(self):
@@ -2038,9 +2101,9 @@ class CustomEditor(BaseEditor):
     def edge_marker_show(self):
         """Show the marker at the specified column number"""
         # Set the marker color to blue
-        marker_color = settings.editor["edge_marker_color"]
+        marker_color = settings.get("editor")["edge_marker_color"]
         # Set the column number where the marker will be shown
-        marker_column = settings.editor["edge_marker_column"]
+        marker_column = settings.get("editor")["edge_marker_column"]
         # Set the marker options
         self.setEdgeColor(qt.QColor(marker_color))
         self.setEdgeColumn(marker_column)
@@ -2058,15 +2121,23 @@ class CustomEditor(BaseEditor):
             self.edge_marker_hide()
 
     def reset_text_changed(self):
+        self.update_document_modification_time()
+
         # Reset text changed indication
         self._parent.reset_text_changed(self._parent.indexOf(self))
+
+    def update_document_modification_time(self) -> None:
+        if self.save_path is None:
+            return
+        # Store the modification time
+        self.modification_time = os.path.getmtime(self.save_path)
 
     def reload_file(self):
         """
         Reload current document from disk
         """
         # Check if file was loaded from or saved to disk
-        if self.save_name == "":
+        if self.save_path == "":
             self.main_form.display.write_to_statusbar(
                 "Document has no file on disk!", 3000
             )
@@ -2084,20 +2155,22 @@ class CustomEditor(BaseEditor):
                 # Cancel tab file reloading
                 return
         # Check if the name of the document is valid
-        if self.name == "" or self.name == None:
+        if self.name == "" or self.name is None:
             return
         # Open the file and read the contents
         try:
-            disk_file_text = functions.read_file_to_string(self.save_name)
+            disk_file_text = functions.read_file_to_string(self.save_path)
         except:
             self.main_form.display.write_to_statusbar("Error reloading file!", 3000)
             return
         # Save the current cursor position
         temp_position = self.getCursorPosition()
+        first_visible_line = self.firstVisibleLine()
         # Reload the file
         self.replace_entire_text(disk_file_text)
         # Restore saved cursor position
         self.setCursorPosition(temp_position[0], temp_position[1])
+        self.setFirstVisibleLine(first_visible_line)
         # Reset text changed indication
         self.reset_text_changed()
 
@@ -2166,14 +2239,14 @@ class CustomEditor(BaseEditor):
     def set_cursor_line_visibility(self, new_state):
         self.setCaretLineVisible(new_state)
         if new_state == True:
-            if "cursor-line-background" not in data.theme.keys():
+            if "cursor-line-background" not in settings.get_theme().keys():
                 self.main_form.display.repl_display_message(
                     "'cursor-line-background' color is not defined in the current theme!",
                     message_type=constants.MessageType.ERROR,
                 )
             else:
                 self.setCaretLineBackgroundColor(
-                    qt.QColor(data.theme["cursor-line-background"])
+                    qt.QColor(settings.get_theme()["cursor-line-background"])
                 )
 
     def toggle_cursor_line_highlighting(self):
@@ -2195,11 +2268,11 @@ class CustomEditor(BaseEditor):
 
     def init_autocompletions(self, new_autocompletions=[]):
         """Set the initial autocompletion functionality for the document"""
-        self.disable_autocompletions()
+        self.autocompletion_disable()
 
     autocompletions_connected = False
 
-    def enable_autocompletions(self, new_autocompletions=[]):
+    def autocompletion_enable(self, new_autocompletions=[]):
         """Function for enabling the CustomEditor autocompletions"""
         # Set how many characters must be typed for the autocompletion popup to appear
         self.setAutoCompletionThreshold(1)
@@ -2229,35 +2302,66 @@ class CustomEditor(BaseEditor):
                 )
                 break
 
-    def disable_autocompletions(self):
+    def autocompletion_disable(self):
         """Disable the CustomEditor autocompletions"""
         self.setAutoCompletionSource(qt.QsciScintilla.AutoCompletionSource.AcsNone)
 
-    def toggle_autocompletions(self):
+    def set_autocompletion(self, state):
+        if state:
+            self.autocompletion_enable()
+        else:
+            self.autocompletion_disable()
+
+    def autocompletion_toggle(self):
         """Enable/disable autocompletions for the CustomEditor"""
         # Initilize the document name for displaying
-        if self.save_name == None or self.save_name == "":
+        if self.save_path == None or self.save_path == "":
             document_name = self._parent.tabText(self._parent.currentIndex())
         else:
-            document_name = os.path.basename(self.save_name)
+            document_name = os.path.basename(self.save_path)
         # Check the autocompletion source
         if (
             self.autoCompletionSource()
             == qt.QsciScintilla.AutoCompletionSource.AcsDocument
         ):
-            self.disable_autocompletions()
+            self.autocompletion_disable()
             message = "Autocompletions DISABLED in {}".format(document_name)
             self.main_form.display.repl_display_message(
                 message, message_type=constants.MessageType.WARNING
             )
             self.main_form.display.write_to_statusbar("Autocompletions DISABLED")
         else:
-            self.enable_autocompletions()
+            self.autocompletion_enable()
             message = "Autocompletions ENABLED in {}".format(document_name)
             self.main_form.display.repl_display_message(
                 message, message_type=constants.MessageType.SUCCESS
             )
             self.main_form.display.write_to_statusbar("Autocompletions ENABLED")
+
+    def set_wordwrap(self, state):
+        """
+        Wrap modes:
+            qt.QsciScintilla.WrapMode.WrapNone - Lines are not wrapped.
+            qt.QsciScintilla.WrapMode.WrapWord - Lines are wrapped at word boundaries.
+            qt.QsciScintilla.WrapMode.WrapCharacter - Lines are wrapped at character boundaries.
+            qt.QsciScintilla.WrapMode.WrapWhitespace - Lines are wrapped at whitespace boundaries.
+        Wrap visual flags:
+            qt.QsciScintilla.WrapVisualFlag.WrapFlagNone - No wrap flag is displayed.
+            qt.QsciScintilla.WrapVisualFlag.WrapFlagByText - A wrap flag is displayed by the text.
+            qt.QsciScintilla.WrapVisualFlag.WrapFlagByBorder - A wrap flag is displayed by the border.
+            qt.QsciScintilla.WrapVisualFlag.WrapFlagInMargin - A wrap flag is displayed in the line number margin.
+        Wrap indentation:
+            qt.QsciScintilla.WrapIndentMode.WrapIndentFixed - Wrapped sub-lines are indented by the amount set by setWrapVisualFlags().
+            qt.QsciScintilla.WrapIndentMode.WrapIndentSame - Wrapped sub-lines are indented by the same amount as the first sub-line.
+            qt.QsciScintilla.WrapIndentMode.WrapIndentIndented - Wrapped sub-lines are indented by the same amount as the first sub-line plus one more level of indentation.
+        """
+        if state:
+            self.setWrapMode(qt.QsciScintilla.WrapMode.WrapWord)
+            self.setWrapVisualFlags(qt.QsciScintilla.WrapVisualFlag.WrapFlagByText)
+            self.setWrapIndentMode(qt.QsciScintilla.WrapIndentMode.WrapIndentSame)
+        else:
+            self.setWrapMode(qt.QsciScintilla.WrapMode.WrapNone)
+            self.setWrapVisualFlags(qt.QsciScintilla.WrapVisualFlag.WrapFlagNone)
 
 
 class Bookmarks:
@@ -2361,44 +2465,44 @@ class Keyboard:
             "\\+Ctrl+Shift": qt.QsciScintillaBase.SCI_WORDPARTRIGHTEXTEND,
             "Home": qt.QsciScintillaBase.SCI_VCHOME,
             "Home+Shift": qt.QsciScintillaBase.SCI_VCHOMEEXTEND,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "go_to_start"
             ]: qt.QsciScintillaBase.SCI_DOCUMENTSTART,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "select_to_start"
             ]: qt.QsciScintillaBase.SCI_DOCUMENTSTARTEXTEND,
             "Home+Alt": qt.QsciScintillaBase.SCI_HOMEDISPLAY,
             "Home+Alt+Shift": qt.QsciScintillaBase.SCI_VCHOMERECTEXTEND,
             "End": qt.QsciScintillaBase.SCI_LINEEND,
             "End+Shift": qt.QsciScintillaBase.SCI_LINEENDEXTEND,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "go_to_end"
             ]: qt.QsciScintillaBase.SCI_DOCUMENTEND,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "select_to_end"
             ]: qt.QsciScintillaBase.SCI_DOCUMENTENDEXTEND,
             "End+Alt": qt.QsciScintillaBase.SCI_LINEENDDISPLAY,
             "End+Alt+Shift": qt.QsciScintillaBase.SCI_LINEENDRECTEXTEND,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "scroll_up"
             ]: qt.QsciScintillaBase.SCI_PAGEUP,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "select_page_up"
             ]: qt.QsciScintillaBase.SCI_PAGEUPEXTEND,
             "PageUp+Alt+Shift": qt.QsciScintillaBase.SCI_PAGEUPRECTEXTEND,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "scroll_down"
             ]: qt.QsciScintillaBase.SCI_PAGEDOWN,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "select_page_down"
             ]: qt.QsciScintillaBase.SCI_PAGEDOWNEXTEND,
             "PageDown+Alt+Shift": qt.QsciScintillaBase.SCI_PAGEDOWNRECTEXTEND,
             "Delete": qt.QsciScintillaBase.SCI_CLEAR,
             "Delete+Shift": qt.QsciScintillaBase.SCI_CUT,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "delete_end_of_word"
             ]: qt.QsciScintillaBase.SCI_DELWORDRIGHT,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "delete_end_of_line"
             ]: qt.QsciScintillaBase.SCI_DELLINERIGHT,
             "Insert": qt.QsciScintillaBase.SCI_EDITTOGGLEOVERTYPE,
@@ -2407,33 +2511,35 @@ class Keyboard:
             "Escape": qt.QsciScintillaBase.SCI_CANCEL,
             "Backspace": qt.QsciScintillaBase.SCI_DELETEBACK,
             "Backspace+Shift": qt.QsciScintillaBase.SCI_DELETEBACK,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "delete_start_of_word"
             ]: qt.QsciScintillaBase.SCI_DELWORDLEFT,
             "Backspace+Alt": qt.QsciScintillaBase.SCI_UNDO,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "delete_start_of_line"
             ]: qt.QsciScintillaBase.SCI_DELLINELEFT,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "undo"
             ]: qt.QsciScintillaBase.SCI_UNDO,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "redo"
             ]: qt.QsciScintillaBase.SCI_REDO,
-            settings.keyboard_shortcuts["editor"]["cut"]: qt.QsciScintillaBase.SCI_CUT,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
+                "cut"
+            ]: qt.QsciScintillaBase.SCI_CUT,
+            settings.get("keyboard-shortcuts")["editor"][
                 "copy"
             ]: qt.QsciScintillaBase.SCI_COPY,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "paste"
             ]: qt.QsciScintillaBase.SCI_PASTE,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "select_all"
             ]: qt.QsciScintillaBase.SCI_SELECTALL,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "indent"
             ]: qt.QsciScintillaBase.SCI_TAB,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "unindent"
             ]: qt.QsciScintillaBase.SCI_BACKTAB,
             "Return": qt.QsciScintillaBase.SCI_NEWLINE,
@@ -2441,19 +2547,19 @@ class Keyboard:
             "Add+Ctrl": qt.QsciScintillaBase.SCI_ZOOMIN,
             "Subtract+Ctrl": qt.QsciScintillaBase.SCI_ZOOMOUT,
             "Divide+Ctrl": qt.QsciScintillaBase.SCI_SETZOOM,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "line_cut"
             ]: qt.QsciScintillaBase.SCI_LINECUT,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "line_delete"
             ]: qt.QsciScintillaBase.SCI_LINEDELETE,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "line_copy"
             ]: qt.QsciScintillaBase.SCI_LINECOPY,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "line_transpose"
             ]: qt.QsciScintillaBase.SCI_LINETRANSPOSE,
-            settings.keyboard_shortcuts["editor"][
+            settings.get("keyboard-shortcuts")["editor"][
                 "line_selection_duplicate"
             ]: qt.QsciScintillaBase.SCI_SELECTIONDUPLICATE,
             "U+Ctrl": qt.QsciScintillaBase.SCI_LOWERCASE,
