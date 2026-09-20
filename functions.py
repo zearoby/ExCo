@@ -2330,6 +2330,49 @@ def create_size(*args):
         raise Exception("[functions.create_point] Unknown arguments: {}".format(args))
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    """Clamp `value` to the inclusive [low, high] range."""
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
+
+
+def ratio_split_sizes(total: int, ratio: float) -> tuple[int, int]:
+    """
+    Split `total` pixels into (new_pane, existing_pane) integer sizes.
+    `ratio` (0..1) is the share given to the new pane and is clamped to
+    [0.05, 0.95] so neither pane can vanish; the two results always sum to `total`.
+    """
+    new_share = int(round(total * clamp(ratio, 0.05, 0.95)))
+    return (new_share, total - new_share)
+
+
+def scale_fractions(fractions: list[float], total: int) -> list[int]:
+    """
+    Scale normalized fractions to exactly `total` pixels.
+    The returned integer sizes always sum to `total`; any rounding remainder
+    is absorbed by the largest pane.
+    """
+    scaled = [int(round(f * total)) for f in fractions]
+    remainder = total - sum(scaled)
+    if remainder:
+        scaled[scaled.index(max(scaled))] += remainder
+    return scaled
+
+
+def integer_split(total: int, count: int) -> list[int]:
+    """
+    Split `total` pixels into `count` integer sizes whose sum equals `total`.
+    The remainder is spread over the leading panes (e.g. 10 / 3 -> [4, 3, 3]).
+    """
+    if count <= 0:
+        return []
+    base, remainder = divmod(total, count)
+    return [base + 1] * remainder + [base] * (count - remainder)
+
+
 PERFORMANCE_MEASURING_FLAG = True
 
 

@@ -49,7 +49,9 @@ class DockingOverlay:
             self.widget = widget
             self.setAcceptDrops(True)
             self.setScaledContents(False)
-            self.setAlignment(qt.Qt.AlignmentFlag.AlignHCenter | qt.Qt.AlignmentFlag.AlignVCenter)
+            self.setAlignment(
+                qt.Qt.AlignmentFlag.AlignHCenter | qt.Qt.AlignmentFlag.AlignVCenter
+            )
             self.setStyleSheet(
                 f"""
 QLabel {{
@@ -117,112 +119,120 @@ QLabel:hover {{
             main_form.display.docking_overlay_hide()
             self.widget.dropEvent(event)
             main_form.view.reindex_all_windows()
-            main_form.view.layout_save()
             return super().dropEvent(event)
 
     class SideDockLabel(BaseDockLabel):
+        """
+        Dock point that splits the hovered pane to make room for the dropped
+        tab(s). The dropped pane receives `default_drop_ratio` (percent) of the
+        original pane's extent; sibling panes are left untouched.
+        """
+
         def dropEvent(self, event):
             main_form = self.parent()
             main_form.display.docking_overlay_hide()
             box = self.widget.parent()
-            if self.name == "top" or self.name == "bottom":
-                if box.orientation() == qt.Qt.Orientation.Vertical:
-                    tabs_index = box.indexOf(self.widget)
-                    if self.name == "bottom":
-                        insert_index = tabs_index + 1
-                    else:
-                        insert_index = tabs_index
-                    tabs = box.add_tabs(index=insert_index)
-                    tabs.dragEnterEvent(self.stored_drag_enter_event)
-                    tabs.dropEvent(event)
-                else:
-                    if box.count() == 1:
-                        box.setOrientation(qt.Qt.Orientation.Vertical)
-                        box.update_orientations()
-                        if self.name == "top":
-                            box.rename(box.objectName())
-                            tabs = box.add_tabs(index=0)
-                        else:
-                            tabs = box.add_tabs()
-                        tabs.dragEnterEvent(self.stored_drag_enter_event)
-                        tabs.dropEvent(event)
-                    else:
-                        tabs_index = box.indexOf(self.widget)
-                        old_tabs = box.widget(tabs_index)
-                        old_tabs.hide()
-                        new_box = box.add_box(
-                            qt.Qt.Orientation.Vertical, index=tabs_index, add_tabs=False
-                        )
-                        new_box.addWidget(old_tabs)
-                        old_tabs.show()
-                        old_tabs.box = new_box
-                        if self.name == "top":
-                            new_box.add_tabs(index=0)
-                            new_tabs = new_box.widget(0)
-                        else:
-                            new_tabs = new_box.add_tabs()
-                        new_tabs.dragEnterEvent(self.stored_drag_enter_event)
-                        new_tabs.dropEvent(event)
-                        split_size = int(box.height() / box.count())
-                        new_box.setSizes([split_size] * new_box.count())
-
-            elif self.name == "right" or self.name == "left":
-                if box.orientation() == qt.Qt.Orientation.Horizontal:
-                    tabs_index = box.indexOf(self.widget)
-                    if self.name == "right":
-                        insert_index = tabs_index + 1
-                    else:
-                        insert_index = tabs_index
-                    tabs = box.add_tabs(index=insert_index)
-                    tabs.dragEnterEvent(self.stored_drag_enter_event)
-                    tabs.dropEvent(event)
-                else:
-                    if box.count() == 1:
-                        box.setOrientation(qt.Qt.Orientation.Horizontal)
-                        box.update_orientations()
-                        if self.name == "right":
-                            tabs = box.add_tabs()
-                        else:
-                            tabs = box.add_tabs(index=0)
-                        tabs.dragEnterEvent(self.stored_drag_enter_event)
-                        tabs.dropEvent(event)
-                    else:
-                        tabs_index = box.indexOf(self.widget)
-                        old_tabs = box.widget(tabs_index)
-                        old_tabs.hide()
-                        new_box = box.add_box(
-                            qt.Qt.Orientation.Horizontal,
-                            index=tabs_index,
-                            add_tabs=False,
-                        )
-                        new_box.addWidget(old_tabs)
-                        old_tabs.show()
-                        old_tabs.box = new_box
-                        new_tabs = new_box.add_tabs()
-                        new_tabs.dragEnterEvent(self.stored_drag_enter_event)
-                        new_tabs.dropEvent(event)
-                        split_size = int(box.width() / box.count())
-                        new_box.setSizes([split_size] * new_box.count())
-
-            # Reindex the tabs in the box
-            main_form.view.reindex_all_windows()
-
-            # Split windows equally
-            if box.orientation() == qt.Qt.Orientation.Horizontal:
-                split_size = int(box.width() / box.count())
+            # Normalized share (0..1) granted to the dropped pane
+            ratio = functions.clamp(
+                settings.get("default_drop_ratio") / 100.0, 0.05, 0.95
+            )
+            vertical_drop = self.name in ("top", "bottom")
+            new_first = self.name in ("top", "left")
+            new_second = self.name in ("bottom", "right")
+            if vertical_drop:
+                along_axis = box.orientation() == qt.Qt.Orientation.Vertical
             else:
-                split_size = int(box.height() / box.count())
-            box.setSizes([split_size] * box.count())
-            # Save layout
-            main_form.view.layout_save()
+                along_axis = box.orientation() == qt.Qt.Orientation.Horizontal
+
+            if along_axis:
+                # The drop runs along the box's current split axis: insert an
+                # adjacent tab and shrink only the hovered pane's region.
+                tabs_index = box.indexOf(self.widget)
+                insert_index = tabs_index + (1 if new_second else 0)
+                old_sizes = box.sizes()
+                new_share, old_share = functions.ratio_split_sizes(
+                    old_sizes[tabs_index], ratio
+                )
+                tabs = box.add_tabs(index=insert_index)
+                tabs.dragEnterEvent(self.stored_drag_enter_event)
+                tabs.dropEvent(event)
+                new_sizes = []
+                for i, size in enumerate(old_sizes):
+                    if i == tabs_index:
+                        if new_first:
+                            new_sizes.append(new_share)
+                            new_sizes.append(old_share)
+                        else:
+                            new_sizes.append(old_share)
+                            new_sizes.append(new_share)
+                    else:
+                        new_sizes.append(size)
+                box.setSizes(new_sizes)
+            elif box.count() == 1:
+                # Flip the whole box onto the drop axis and split its only pane.
+                if vertical_drop:
+                    orientation = qt.Qt.Orientation.Vertical
+                    old_extent = box.size().height()
+                else:
+                    orientation = qt.Qt.Orientation.Horizontal
+                    old_extent = box.size().width()
+                new_share, old_share = functions.ratio_split_sizes(old_extent, ratio)
+                box.setOrientation(orientation)
+                box.update_orientations()
+                if new_first:
+                    tabs = box.add_tabs(index=0)
+                else:
+                    tabs = box.add_tabs()
+                tabs.dragEnterEvent(self.stored_drag_enter_event)
+                tabs.dropEvent(event)
+                if new_first:
+                    box.setSizes([new_share, old_share])
+                else:
+                    box.setSizes([old_share, new_share])
+            else:
+                # Wrap the hovered pane into a nested box on the drop axis and
+                # split that pane's region, leaving sibling panes untouched.
+                tabs_index = box.indexOf(self.widget)
+                old_sizes = box.sizes()
+                new_share, old_share = functions.ratio_split_sizes(
+                    old_sizes[tabs_index], ratio
+                )
+                old_tabs = box.widget(tabs_index)
+                old_tabs.hide()
+                if vertical_drop:
+                    orientation = qt.Qt.Orientation.Vertical
+                else:
+                    orientation = qt.Qt.Orientation.Horizontal
+                new_box = box.add_box(orientation, index=tabs_index, add_tabs=False)
+                new_box.addWidget(old_tabs)
+                old_tabs.show()
+                old_tabs.box = new_box
+                if new_first:
+                    new_tabs = new_box.add_tabs(index=0)
+                else:
+                    new_tabs = new_box.add_tabs()
+                new_tabs.dragEnterEvent(self.stored_drag_enter_event)
+                new_tabs.dropEvent(event)
+                if new_first:
+                    new_box.setSizes([new_share, old_share])
+                else:
+                    new_box.setSizes([old_share, new_share])
+                box.setSizes(old_sizes)
+
+            # Reindex the tabs in the box (also schedules the layout save)
+            main_form.view.reindex_all_windows()
 
             return super().dropEvent(event)
 
     @staticmethod
     def get_scaled_point_size():
         return (
-            DockingOverlay.INFO_POINT_SIZE[0] * settings.get("toplevel_menu_scale") / 100.0,
-            DockingOverlay.INFO_POINT_SIZE[1] * settings.get("toplevel_menu_scale") / 100.0,
+            DockingOverlay.INFO_POINT_SIZE[0]
+            * settings.get("toplevel_menu_scale")
+            / 100.0,
+            DockingOverlay.INFO_POINT_SIZE[1]
+            * settings.get("toplevel_menu_scale")
+            / 100.0,
         )
 
     @staticmethod
@@ -288,43 +298,38 @@ QLabel:hover {{
             dock_point_center.show()
             # Rest
             rest = (left, right, top, bottom)
+            # The side previews expand to the split share granted to the
+            # dropped pane, so what you see matches the resulting split
+            ratio = functions.clamp(
+                settings.get("default_drop_ratio") / 100.0, 0.05, 0.95
+            )
+            pane_width = widget.geometry().width() * ratio
+            pane_height = widget.geometry().height() * ratio
             for i, p in enumerate(rest):
                 exp_pos = None
                 exp_size = None
                 name = None
                 if i == 0:
                     exp_pos = (left[0], top[1])
-                    exp_size = (
-                        widget.geometry().width() * 1 / 3,
-                        widget.geometry().height(),
-                    )
+                    exp_size = (pane_width, widget.geometry().height())
                     name = "left"
                 elif i == 1:
                     exp_pos = (
-                        (right[0] - (widget.geometry().width() * 1 / 3) + point_size[0]),
+                        (right[0] - pane_width + point_size[0]),
                         top[1],
                     )
-                    exp_size = (
-                        widget.geometry().width() * 1 / 3,
-                        widget.geometry().height(),
-                    )
+                    exp_size = (pane_width, widget.geometry().height())
                     name = "right"
                 elif i == 2:
                     exp_pos = (left[0], top[1])
-                    exp_size = (
-                        widget.geometry().width(),
-                        widget.geometry().height() * 1 / 3,
-                    )
+                    exp_size = (widget.geometry().width(), pane_height)
                     name = "top"
                 elif i == 3:
                     exp_pos = (
                         left[0],
-                        (bottom[1] - (widget.geometry().height() * 1 / 3) + point_size[1]),
+                        (bottom[1] - pane_height + point_size[1]),
                     )
-                    exp_size = (
-                        widget.geometry().width(),
-                        widget.geometry().height() * 1 / 3,
-                    )
+                    exp_size = (widget.geometry().width(), pane_height)
                     name = "bottom"
                 dock_point = self.create_dock_point(
                     name,

@@ -40,6 +40,7 @@ from gui.dialogs import YesNoDialog
 from gui.excoinfo import ExCoInfo
 from gui.functionwheel import FunctionWheel
 from gui.hexview import HexView
+from gui.markdownviewer import MarkdownViewer
 from gui.menu import Menu
 from gui.plaineditor import PlainEditor
 from gui.settingsguimanipulator import SettingsGuiManipulator
@@ -573,6 +574,7 @@ QSplitter::handle {{
             "TreeDisplay": TreeDisplay,
             "TreeExplorer": TreeExplorer,
             "HexView": HexView,
+            "MarkdownViewer": MarkdownViewer,
             "Terminal": Terminal,
         }
         inverted_classes = {v: k for k, v in classes.items()}
@@ -680,6 +682,11 @@ QSplitter::handle {{
         main_box = self._parent.main_box
         main_box.clear_all()
 
+        # Fractional nested-box sizes are applied once the boxes have real
+        # geometry (scaled to the current window size); legacy pixel lists are
+        # applied inline as before.
+        pending_sizes: list[tuple[Any, list[Any]]] = []
+
         def create_box(parent: Any, box: Dict[str, Any]) -> None:
             for k, v in sorted(box.items()):
                 if k.startswith("BOX"):
@@ -691,7 +698,12 @@ QSplitter::handle {{
                     for _k, _v in v.items():
                         create_box(new_box, _v)
                 elif k == "SIZES":
-                    new_box.setSizes(v)
+                    if v and any(size > 1.0 for size in v):
+                        # Legacy pixel-based sizes
+                        new_box.setSizes(v)
+                    else:
+                        # Normalized pane ratios, applied once geometry exists
+                        pending_sizes.append((new_box, v))
                 elif k.startswith("TABS"):
                     new_tabs = parent.add_tabs()
                     new_tabs.check_close_button()
@@ -765,12 +777,20 @@ QSplitter::handle {{
                                     file_explorer.open_file_hex_signal.connect(
                                         self._parent.open_file_hex
                                     )
+                                    file_explorer.open_file_markdown_signal.connect(
+                                        self._parent.open_file_markdown
+                                    )
                                     file_explorer.internals.update_icon(file_explorer)
 
                             elif cls == "HexView":
                                 file_path = widget_data[0]
                                 if os.path.isfile(file_path):
                                     new_tabs.hexview_add(file_path)
+
+                            elif cls == "MarkdownViewer":
+                                file_path = widget_data[0]
+                                if os.path.isfile(file_path):
+                                    new_tabs.markdown_add(file_path)
 
                             elif cls == "Terminal":
                                 working_path = widget_data[0]
@@ -808,14 +828,53 @@ QSplitter::handle {{
         for k, v in sorted(layout["BOXES"].items()):
             create_box(main_box, v)
 
+        # Scale fractional sizes onto the realized geometry; a couple of
+        # passes absorb the geometry changes that setSizes propagates.
+        def apply_pending_sizes() -> None:
+            for _ in range(3):
+                changed = False
+                for box_sizes, fractions in pending_sizes:
+                    if self._apply_box_fractions(box_sizes, fractions):
+                        changed = True
+                if not changed:
+                    break
+                qt.QApplication.processEvents()
+
+        apply_pending_sizes()
+
         main_form.display.repl_unsuppress()
+
+    def _apply_box_fractions(self, box: Any, fractions: Any) -> bool:
+        """
+        Scale normalized pane ratios onto `box`'s current extent along its
+        split axis and apply them as exact integer sizes.
+        Returns True when a change was actually applied.
+        """
+        if not fractions:
+            return False
+        if box.orientation() == qt.Qt.Orientation.Horizontal:
+            extent = box.width()
+        else:
+            extent = box.height()
+        if extent <= 0:
+            return False
+        sizes = functions.scale_fractions([float(f) for f in fractions], extent)
+        if box.sizes() == sizes:
+            return False
+        box.setSizes(sizes)
+        return True
 
     def layout_save(self, *args: Any, _async: bool = True) -> None:
         def save(*args: Any, **kwargs: Any) -> None:
             try:
                 if _async:
                     self.layout_save_timer.stop()
-                self.layout_generate()
+                layout = self.layout_generate()
+                # Keep the on-disk layout in sync with the live state so the
+                # last layout survives crashes, not just orderly quits.
+                if settings.get("restore_last_session"):
+                    # Proxy exposed dynamically by the settings facade
+                    settings.save_last_layout(layout)  # type: ignore[attr-defined]
             except:
                 self._parent.display.repl_display_error(traceback.format_exc())
 

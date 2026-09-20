@@ -7,8 +7,9 @@ For complete license information of the dependencies, check the 'additional_lice
 """
 
 import os
+from typing import Optional
+
 import qt
-import data
 import constants
 import functions
 import components.internals
@@ -39,6 +40,21 @@ class HexView(qt.QFrame):
         self.current_icon = functions.create_icon("various/node_template.png")
         self.internals = components.internals.Internals(parent=self, tab_widget=parent)
         self.internals.update_icon(self)
+
+        # Store the modification time for change detection
+        modification_time: Optional[float] = None
+        try:
+            modification_time = os.path.getmtime(file_path)
+        except OSError:
+            pass
+        self.modification_time = modification_time
+
+        # Register with the shared path watcher (only remove what we added)
+        self._added_watch = False
+        main_form_tools = getattr(main_form, "tools", None)
+        if main_form_tools is not None:
+            if main_form_tools.pathwatcher_add(file_path):
+                self._added_watch = True
 
         # Initialize widgets
         self.__initialize_view()
@@ -145,7 +161,9 @@ class HexView(qt.QFrame):
         for row_number, chunk in enumerate(chunks):
             if len(chunk) < size:
                 chunk_length = len(chunk)
-                chunk_list = [f"{chunk[i]:02x}" if i < chunk_length else " " for i in range(size)]
+                chunk_list = [
+                    f"{chunk[i]:02x}" if i < chunk_length else " " for i in range(size)
+                ]
             else:
                 chunk_list = [f"{c:02x}" for c in chunk]
             # Address
@@ -186,6 +204,10 @@ class HexView(qt.QFrame):
         with open(self.save_path, "rb") as f:
             content = f.read()
         self.show_file_hex_data(content)
+        try:
+            self.modification_time = os.path.getmtime(self.save_path)
+        except OSError:
+            self.modification_time = None
 
     def update_style(self):
         # Frame
@@ -193,9 +215,15 @@ class HexView(qt.QFrame):
 
         # Table style
         for k, v in self.cache_table.items():
-            v.horizontalHeader().setSectionResizeMode(qt.QHeaderView.ResizeMode.ResizeToContents)
-            v.verticalScrollBar().setContextMenuPolicy(qt.Qt.ContextMenuPolicy.NoContextMenu)
-            v.horizontalScrollBar().setContextMenuPolicy(qt.Qt.ContextMenuPolicy.NoContextMenu)
+            v.horizontalHeader().setSectionResizeMode(
+                qt.QHeaderView.ResizeMode.ResizeToContents
+            )
+            v.verticalScrollBar().setContextMenuPolicy(
+                qt.Qt.ContextMenuPolicy.NoContextMenu
+            )
+            v.horizontalScrollBar().setContextMenuPolicy(
+                qt.Qt.ContextMenuPolicy.NoContextMenu
+            )
 
         # Rest
         for k, v in self.__cache_buttons.items():
@@ -204,6 +232,13 @@ class HexView(qt.QFrame):
             v.update_style()
         for k, v in self.__cache_comboboxes.items():
             v.update_style()
+
+    def shutdown(self) -> None:
+        if not self._added_watch:
+            return
+        tools = getattr(self.main_form, "tools", None)
+        if tools is not None:
+            tools.pathwatcher_remove(self.save_path)
 
 
 class HexTable(qt.QTableView):
@@ -249,9 +284,14 @@ class HexTableModel(qt.QAbstractTableModel):
             if column == self.__last_index:
                 return qt.Qt.AlignmentFlag.AlignLeft | qt.Qt.AlignmentFlag.AlignVCenter
             else:
-                return qt.Qt.AlignmentFlag.AlignHCenter | qt.Qt.AlignmentFlag.AlignVCenter
+                return (
+                    qt.Qt.AlignmentFlag.AlignHCenter | qt.Qt.AlignmentFlag.AlignVCenter
+                )
 
     def headerData(self, section, orientation, role=qt.Qt.ItemDataRole.DisplayRole):
-        if orientation == qt.Qt.Orientation.Horizontal and role == qt.Qt.ItemDataRole.DisplayRole:
+        if (
+            orientation == qt.Qt.Orientation.Horizontal
+            and role == qt.Qt.ItemDataRole.DisplayRole
+        ):
             return self.__headers[section]
         return super().headerData(section, orientation, role)

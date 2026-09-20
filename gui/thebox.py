@@ -18,11 +18,25 @@ import qt
 from gui import (
     customeditor,
     hexview,
+    markdownviewer,
     plaineditor,
     stylesheets,
     tabwidget,
     treedisplays,
 )
+
+
+class TheBoxSplitterHandle(qt.QSplitterHandle):
+    """Splitter handle that re-balances the box on a double-click."""
+
+    doubleClicked = qt.pyqtSignal()
+
+    def __init__(self, orientation: qt.Qt.Orientation, parent: qt.QSplitter) -> None:
+        super().__init__(orientation, parent)
+
+    def mouseDoubleClickEvent(self, event: qt.QMouseEvent | None) -> None:
+        self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
 
 
 class TheBox(qt.QSplitter):
@@ -41,6 +55,11 @@ class TheBox(qt.QSplitter):
         self.splitterMoved.connect(self.splitterMoveEvent)
         # Update style
         self.update_style()
+
+    def createHandle(self):
+        handle = TheBoxSplitterHandle(self.orientation(), self)
+        handle.doubleClicked.connect(self.handle_double_clicked)
+        return handle
 
     def _generate_name(self, name, parent_name):
         self.name = name
@@ -142,9 +161,16 @@ class TheBox(qt.QSplitter):
             child = self.widget(i)
             if isinstance(child, TheBox):
                 orientation = child.get_orientation_letter()
+                sizes = child.sizes()
+                total = sum(sizes)
+                # Persist pane ratios instead of raw pixels so the layout
+                # stays proportional across window sizes, screens and DPI
+                # (legacy pixel lists are still recognized on restore).
                 children[i] = {
                     f"BOX-{orientation}": child.get_child_boxes(),
-                    "SIZES": child.sizes(),
+                    "SIZES": [round(s / total, 6) for s in sizes]
+                    if total > 0
+                    else sizes,
                 }
             else:
                 tabs = {}
@@ -200,6 +226,17 @@ class TheBox(qt.QSplitter):
                                 w.internals.get_id(),
                             ),
                         )
+                    elif isinstance(w, markdownviewer.MarkdownViewer):
+                        # Markdown viewer
+                        markdownviewer_name = "{}-{}".format(name, j)
+                        tabs[markdownviewer_name] = (
+                            inverted_classes[w.__class__],
+                            j,
+                            (
+                                w.save_path,
+                                w.internals.get_id(),
+                            ),
+                        )
                     elif isinstance(w, terminal.Terminal):
                         # Terminal
                         terminal_name = "{}-{}".format(name, j)
@@ -236,3 +273,9 @@ class TheBox(qt.QSplitter):
         mouse_buttons = data.application.mouseButtons()
         if mouse_buttons == qt.Qt.MouseButton.LeftButton:
             self.main_form.view.layout_save()
+
+    def handle_double_clicked(self) -> None:
+        """Equalize the box children when a splitter handle is double-clicked."""
+        sizes = self.sizes()
+        if len(sizes) > 1:
+            self.setSizes(functions.integer_split(sum(sizes), len(sizes)))

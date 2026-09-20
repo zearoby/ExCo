@@ -1530,6 +1530,7 @@ def init_menubar(self) -> None:
             file_explorer.display_directory(os.getcwd())
             file_explorer.open_file_signal.connect(self.open_file)
             file_explorer.open_file_hex_signal.connect(self.open_file_hex)
+            file_explorer.open_file_markdown_signal.connect(self.open_file_markdown)
             file_explorer.internals.set_icon(
                 file_explorer,
                 functions.create_icon("tango_icons/system-show-cwd-tree-blue.png"),

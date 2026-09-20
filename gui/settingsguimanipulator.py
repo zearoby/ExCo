@@ -125,6 +125,9 @@ class SettingsGuiManipulator(qt.QFrame):
             "toplevel_menu_scale": lambda v: self._set_spin(
                 self.menu_scale_spin, int(v)
             ),
+            "default_drop_ratio": lambda v: self._set_spin(
+                self.drop_ratio_spin, int(v)
+            ),
             "tree_display_icon_size": lambda v: self._set_spin(
                 self.tree_icon_size_spin, int(v)
             ),
@@ -526,6 +529,15 @@ class SettingsGuiManipulator(qt.QFrame):
         general_layout.addWidget(self.icon_scale_spin, 2, 3)
         general_layout.setColumnStretch(1, 1)
         general_layout.setColumnStretch(3, 1)
+        general_layout.addWidget(qt.QLabel("Drop split %:", general_group), 3, 0)
+        self.drop_ratio_spin = qt.QSpinBox(general_group)
+        self.drop_ratio_spin.setRange(5, 95)
+        self.drop_ratio_spin.setSingleStep(5)
+        self.drop_ratio_spin.setValue(int(settings.get("default_drop_ratio")))
+        self.drop_ratio_spin.valueChanged.connect(
+            functools.partial(self.__simple_setting, "default_drop_ratio")
+        )
+        general_layout.addWidget(self.drop_ratio_spin, 3, 1)
         general_group.setLayout(general_layout)
         self.__register_group(
             general_group,
@@ -539,6 +551,10 @@ class SettingsGuiManipulator(qt.QFrame):
             "scale",
             "icon",
             "override",
+            "drop",
+            "split",
+            "ratio",
+            "pane",
         )
 
         # ------------------------------------------------------------------

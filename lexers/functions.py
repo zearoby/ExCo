@@ -50,7 +50,9 @@ def _ensure_maps():
     if _FILE_TYPE_LEXER_MAP is not None:
         return
     _FILE_TYPE_LEXER_MAP = {
-        "python": lambda: lexers.CustomPython() if lexers.nim_lexers_found else lexers.Python(),
+        "python": lambda: (
+            lexers.CustomPython() if lexers.nim_lexers_found else lexers.Python()
+        ),
         "cython": lambda: lexers.Cython(),
         "c": lambda: lexers.CPP(),
         "c++": lambda: lexers.CPP(),
@@ -65,6 +67,7 @@ def _ensure_maps():
         "batch": lambda: lexers.Batch(),
         "bash": lambda: lexers.Bash(),
         "lua": lambda: lexers.Lua(),
+        "markdown": lambda: lexers.Markdown(),
         "c#": lambda: lexers.CPP(),
         "java": lambda: lexers.Java(),
         "javascript": lambda: lexers.JavaScript(),
@@ -106,6 +109,7 @@ def _ensure_maps():
         lexers.Batch: (False, "::", None),
         lexers.Bash: (False, "#", None),
         lexers.Lua: (False, "--", None),
+        lexers.Markdown: (False, None, None),
         lexers.Java: (False, "//", None),
         lexers.JavaScript: (False, "//", None),
         lexers.Octave: (False, "#", None),

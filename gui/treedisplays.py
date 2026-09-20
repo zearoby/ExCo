@@ -488,6 +488,32 @@ class TreeDisplay(qt.QTreeView):
                 icon = functions.create_icon("various/node_template.png")
                 action_open_hex.setIcon(icon)
                 self.tree_menu.addAction(action_open_hex)
+
+                # Open with Markdown Viewer (only for markdown documents)
+                if functions.get_file_type(item.full_name) == "markdown":
+
+                    def open_markdown():
+                        if hasattr(item.attributes, "itype"):
+                            if item.attributes.itype == TreeExplorer.ItemType.FILE:
+                                file_path = item.attributes.path
+                                self.open_file_markdown_signal.emit(file_path)
+                            else:
+                                self.main_form.display.repl_display_error(
+                                    "Item of type '{}' cannot be opened in the Markdown Viewer!".format(
+                                        item.attributes.itype
+                                    )
+                                )
+                        else:
+                            self.open_file_markdown_signal.emit(item.full_name)
+
+                    action_open_markdown = qt.QAction(
+                        "Open with Markdown Viewer", self.tree_menu
+                    )
+                    action_open_markdown.triggered.connect(open_markdown)
+                    icon = functions.create_icon("tango_icons/text-x-generic.png")
+                    action_open_markdown.setIcon(icon)
+                    self.tree_menu.addAction(action_open_markdown)
+
                 # Open path in explorer
                 open_in_explorer_action = qt.QAction(self.open_in_explorer_text, self)
 
@@ -2562,6 +2588,7 @@ class TreeExplorer(TreeDisplayBase):
     # Signals
     open_file_signal = qt.pyqtSignal(str)
     open_file_hex_signal = qt.pyqtSignal(str)
+    open_file_markdown_signal = qt.pyqtSignal(str)
     open_directory_signal = qt.pyqtSignal()
 
     # Attributes
@@ -2936,6 +2963,21 @@ class TreeExplorer(TreeDisplayBase):
                 icon = functions.create_icon("various/node_template.png")
                 action_open_hex.setIcon(icon)
                 self.tree_menu.addAction(action_open_hex)
+
+                # Open with Markdown Viewer (only for markdown documents)
+                if functions.get_file_type(item.attributes.path) == "markdown":
+
+                    def open_markdown():
+                        file_path = item.attributes.path
+                        self.open_file_markdown_signal.emit(file_path)
+
+                    action_open_markdown = qt.QAction(
+                        "Open with Markdown Viewer", self.tree_menu
+                    )
+                    action_open_markdown.triggered.connect(open_markdown)
+                    icon = functions.create_icon("tango_icons/text-x-generic.png")
+                    action_open_markdown.setIcon(icon)
+                    self.tree_menu.addAction(action_open_markdown)
 
             # Open path in explorer
             open_in_explorer_action = qt.QAction(self.open_in_explorer_text, self)

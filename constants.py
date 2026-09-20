@@ -100,6 +100,7 @@ supported_file_extentions = {
     ],
     "json": [".json"],
     "lua": [".lua"],
+    "markdown": [".md", ".markdown"],
     "nim": [".nim", ".nims", ".nimble"],
     "oberon/modula": [".mod", ".ob", ".ob2", ".cp"],
     "octave": [".m"],
@@ -142,6 +143,7 @@ class FileStatus(enum.Enum):
 class FileType(enum.Enum):
     Text = 0
     Hex = 1
+    Markdown = 2
 
 
 class CanSave:

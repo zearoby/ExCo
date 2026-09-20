@@ -23,7 +23,9 @@ import cx_Freeze
 
 
 def _project_root() -> str:
-    return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    )
 
 
 CONFIG_PATH = os.path.join(_project_root(), "freeze_config.json")
@@ -71,7 +73,9 @@ def _use_pure_black(output_directory: str) -> None:
                         continue
                     src: str = os.path.join(root, name)
                     rel: str = os.path.relpath(src, venv_package)
-                    cfile: str = os.path.join(build_package, os.path.splitext(rel)[0] + ".pyc")
+                    cfile: str = os.path.join(
+                        build_package, os.path.splitext(rel)[0] + ".pyc"
+                    )
                     os.makedirs(os.path.dirname(cfile), exist_ok=True)
                     py_compile.compile(src, cfile=cfile, doraise=True)
 
@@ -139,7 +143,9 @@ def get_all_imports() -> Dict[str, List[str]]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Freeze ExCo into a standalone executable.")
+    parser = argparse.ArgumentParser(
+        description="Freeze ExCo into a standalone executable."
+    )
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -159,7 +165,11 @@ def resolve_output_dir(custom_parent: str, base_name: str) -> str:
         if not os.path.isdir(path):
             raise NotADirectoryError(f"Path exists but is not a directory: {path}")
     else:
-        answer = input(f"Directory does not exist:\n  {path}\nCreate it? [y/N] ").strip().lower()
+        answer = (
+            input(f"Directory does not exist:\n  {path}\nCreate it? [y/N] ")
+            .strip()
+            .lower()
+        )
         if answer not in ("y", "yes"):
             print("Aborted.")
             sys.exit(0)
@@ -222,15 +232,24 @@ def main() -> int:
 
     # Code-quality tools are imported lazily at runtime (not during the
     # import-analysis pass), so add them explicitly to be safe
-    for lazy_package in ("autopep8", "black", "bs4", "isort", "pyflakes", "ruff", "yapf"):
+    for lazy_package in (
+        "autopep8",
+        "black",
+        "bs4",
+        "isort",
+        "pyflakes",
+        "ruff",
+        "yapf",
+    ):
         if lazy_package not in packages_list:
             packages_list.append(lazy_package)
 
     # components.codequality is also imported lazily at runtime
     # (gui/mainwindow/tools.py, gui/mainwindow/display.py), so it is not
     # discovered by the import-analysis pass above; include it explicitly
-    if "components.codequality" not in includes:
-        includes.append("components.codequality")
+    for lazy_module in ("components.codequality", "components.markdownhtml"):
+        if lazy_module not in includes:
+            includes.append(lazy_module)
 
     # Other local modules imported lazily at runtime that the import-analysis
     # pass misses: gui/mainwindow/menubar.py -> libraryfunctions,
@@ -250,8 +269,8 @@ def main() -> int:
 
     # Third-party packages imported lazily at runtime on all platforms
     # (components/processcontroller.py + gui/externalprogram.py -> psutil,
-    # gui/terminal.py -> pyte)
-    for lazy_package in ("psutil", "pyte"):
+    # gui/terminal.py -> pyte, components/markdownhtml.py -> markdown/pygments)
+    for lazy_package in ("psutil", "pyte", "markdown", "pygments"):
         if lazy_package not in packages_list:
             packages_list.append(lazy_package)
 

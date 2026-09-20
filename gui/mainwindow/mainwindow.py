@@ -22,6 +22,7 @@ import json
 import keyword
 import os
 import re
+import subprocess
 import sys
 import traceback
 from typing import *
@@ -51,6 +52,7 @@ from gui.excoinfo import ExCoInfo
 from gui.externalprogram import ExternalWidget
 from gui.functionwheel import FunctionWheel
 from gui.hexview import HexView
+from gui.markdownviewer import MarkdownViewer
 from gui.plaineditor import PlainEditor
 from gui.replbox import ReplBox
 from gui.replindicator import ReplIndicator
@@ -642,6 +644,15 @@ class MainWindow(qt.QMainWindow):
             layout = self.view.layout_generate()
             settings.save_last_layout(layout)
 
+        # Stop background file monitoring only on a confirmed quit
+        if event.isAccepted():
+            try:
+                if hasattr(self.tools, "_mtime_poll_timer"):
+                    self.tools._mtime_poll_timer.stop()
+                self.tools.path_watcher.stop_monitoring()
+            except Exception:
+                pass
+
     def resizeEvent(self, event):
         """
         Resize QMainWindow event
@@ -1082,6 +1093,11 @@ class MainWindow(qt.QMainWindow):
                     tab_widget.widget(tab_widget.currentIndex()).setParent(None)
                     tab_widget.removeTab(tab_widget.currentIndex())
                     return None
+                # Store the modification time for change detection
+                try:
+                    new_tab.modification_time = os.path.getmtime(in_file)
+                except OSError:
+                    new_tab.modification_time = None
                 # Reset the changed status of the current tab,
                 # because adding the file content line by line was registered as a text change
                 tab_widget.reset_text_changed()
@@ -1179,6 +1195,98 @@ class MainWindow(qt.QMainWindow):
             self.display.repl_display_error(message)
             self.display.write_to_statusbar("File cannot be read!", 3000)
 
+    def open_file_markdown(self, file_path, tab_widget=None, save_layout=False):
+        # Check if file exists
+        if os.path.isfile(file_path) == False:
+            self.display.repl_display_message(
+                "File: {}\ndoesn't exist!".format(file_path),
+                message_type=constants.MessageType.ERROR,
+            )
+            return
+        # Check if file is already open
+        check_tab_widget, check_index = self.check_open_file(
+            file_path, _type=constants.FileType.Markdown
+        )
+        if check_index is not None and check_tab_widget is not None:
+            check_tab_widget.setCurrentIndex(check_index)
+            return
+
+        if tab_widget is None:
+            tab_widget = self.get_largest_window()
+
+        # Add new markdown viewer document
+        new_tab = tab_widget.markdown_add(file_path)
+        # Update the icon
+        new_tab.internals.update_icon(new_tab)
+
+        if new_tab is not None:
+            # Save the layout if needed
+            if save_layout == True:
+                self.view.layout_save()
+            # Update the settings manipulator with the new file
+            self.settings.update_recent_list(file_path)
+            # Update the current working directory
+            path = os.path.dirname(file_path)
+            if path == "":
+                path = data.application_directory
+            self.set_cwd(path)
+            # Set focus to the newly opened document
+            tab_widget.currentWidget().setFocus()
+            return new_tab
+        else:
+            message = "File cannot be read!"
+            self.display.repl_display_error(message)
+            self.display.write_to_statusbar("File cannot be read!", 3000)
+
+    def open_markdown_preview(self, file_path=None):
+        # If no path is given, use the indicated tab
+        if file_path is None:
+            tab = self.get_tab_by_indication()
+            if hasattr(tab, "save_path"):
+                file_path = tab.save_path
+            else:
+                message = "No markdown document is indicated!"
+                self.display.repl_display_error(message)
+                self.display.write_to_statusbar(message)
+                return
+        # Check if file exists
+        if os.path.isfile(file_path) == False:
+            self.display.repl_display_error("File: {} doesn't exist!".format(file_path))
+            return
+        # Check that it's a markdown file
+        if functions.get_file_type(file_path) != "markdown":
+            message = "File: '{}' is not a markdown document!".format(file_path)
+            self.display.repl_display_error(message)
+            self.display.write_to_statusbar(message)
+            return
+        import components.markdownhtml
+
+        try:
+            text = functions.read_file_to_string(file_path)
+            html_text = components.markdownhtml.render(
+                text, title=os.path.basename(file_path)
+            )
+            html_text = components.markdownhtml.absolutize_links(
+                html_text, os.path.dirname(file_path)
+            )
+            # Deterministic temp output path
+            import tempfile
+
+            preview_dir = os.path.join(tempfile.gettempdir(), "exco", "markdown")
+            os.makedirs(preview_dir, exist_ok=True)
+            html_path = os.path.join(
+                preview_dir, "{}.html".format(os.path.basename(file_path))
+            )
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_text)
+            if data.on_windows:
+                os.startfile(html_path)
+            else:
+                subprocess.call(["xdg-open", html_path])
+        except Exception as e:
+            message = "Error rendering Markdown preview!\n{}".format(e)
+            self.display.repl_display_error(message)
+
     def check_open_file(self, file_with_path, _type=constants.FileType.Text):
         """
         Check if a file is already open in one of the windows
@@ -1205,6 +1313,18 @@ class MainWindow(qt.QMainWindow):
                     # Check the file name and file name with path
                     tab = tab_widget.widget(i)
                     if isinstance(tab, HexView) and tab.save_path == file_with_path:
+                        # If the file is already open, get its index in the tab widget
+                        found_tab_widget = tab_widget
+                        found_index = i
+                        break
+            elif _type == constants.FileType.Markdown:
+                for i in range(tab_widget.count()):
+                    # Check the file name and file name with path
+                    tab = tab_widget.widget(i)
+                    if (
+                        isinstance(tab, MarkdownViewer)
+                        and tab.save_path == file_with_path
+                    ):
                         # If the file is already open, get its index in the tab widget
                         found_tab_widget = tab_widget
                         found_index = i

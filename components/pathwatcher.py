@@ -9,7 +9,7 @@ For complete license information of the dependencies, check the 'additional_lice
 import enum
 import os
 import threading
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 import functions
 import qt
@@ -46,9 +46,15 @@ class PathWatcher(qt.QObject):
         """
         super().__init__(parent)
         self.monitored_files: Set[str] = set()  # Set of files being monitored
-        self._files_by_directory = {}  # Directory -> files mapping for O(1) lookups
-        self.observers = {}  # Dictionary mapping directory paths to observers
-        self._lock: threading.Lock = threading.Lock()  # Thread safety for file list operations
+        self._files_by_directory: dict[
+            str, set[str]
+        ] = {}  # Directory -> files mapping for O(1) lookups
+        self.observers: dict[
+            str, Any
+        ] = {}  # Dictionary mapping directory paths to observers
+        self._lock: threading.Lock = (
+            threading.Lock()
+        )  # Thread safety for file list operations
         self._is_stopping: threading.Event = (
             threading.Event()
         )  # Signals that monitoring is stopping
@@ -84,7 +90,9 @@ class PathWatcher(qt.QObject):
         directory = os.path.dirname(file_path)
 
         if os.path.isabs(file_path) and file_path.startswith("/"):
-            self.echo(f"Skipping WSL/unix path (not accessible via Windows APIs): {file_path}")
+            self.echo(
+                f"Skipping WSL/unix path (not accessible via Windows APIs): {file_path}"
+            )
             return False
 
         if not os.path.isdir(directory):
@@ -239,7 +247,9 @@ class PathWatcher(qt.QObject):
             self.echo(f"File {event_type.name}: {source_path}")
 
         # Call the callback if provided
-        self.file_changed.emit(event_type, source_path, destination_path, modification_time)
+        self.file_changed.emit(
+            event_type, source_path, destination_path, modification_time
+        )
 
     def stop_monitoring(self) -> None:
         """Stop all monitoring and clean up resources."""
@@ -269,7 +279,9 @@ class PathWatcher(qt.QObject):
         new_directory = os.path.dirname(new_path)
 
         if os.path.isabs(new_path) and new_path.startswith("/"):
-            self.echo(f"Skipping WSL/unix path (not accessible via Windows APIs): {new_path}")
+            self.echo(
+                f"Skipping WSL/unix path (not accessible via Windows APIs): {new_path}"
+            )
             return False
 
         if not os.path.isdir(new_directory):
@@ -362,11 +374,56 @@ class FileChangeHandler(FileSystemEventHandler):
 
         source_path = functions.normalize_path(source_path)
 
-        # Early return if not monitored to avoid expensive syscalls
+        normalized_destination: Optional[str] = None
+        if destination_path is not None:
+            normalized_destination = functions.normalize_path(destination_path)
+
         with self.path_watcher._lock:
-            if source_path not in self.path_watcher.monitored_files:
+            # Early return if not monitored to avoid expensive syscalls
+            source_monitored = source_path in self.path_watcher.monitored_files
+            destination_monitored = (
+                normalized_destination is not None
+                and normalized_destination in self.path_watcher.monitored_files
+            )
+            if not source_monitored and not destination_monitored:
                 self.echo(f"Ignored unmonitored file: {source_path}")
                 return
+
+        if event_type == FileEvent.MOVED:
+            if (
+                destination_monitored
+                and not source_monitored
+                and normalized_destination is not None
+            ):
+                # A watched file replaced by an atomic-write tool (write to a
+                # temp file, then os.replace/rename over the original) is
+                # reported as MOVED with an unmonitored source and a monitored
+                # destination. The destination still holds our file, so surface
+                # it as a modification of that watched path.
+                replace_mtime: Optional[float] = None
+                try:
+                    replace_mtime = os.path.getmtime(normalized_destination)
+                except (FileNotFoundError, PermissionError):
+                    pass
+                self.path_watcher._handle_file_event(
+                    FileEvent.MODIFIED, normalized_destination, None, replace_mtime
+                )
+                self.echo(f"File replaced via rename: {normalized_destination}")
+                return
+            if source_monitored and normalized_destination is not None:
+                # The watched file itself was moved elsewhere. Relay the move so
+                # the editor tab can follow the file to its new location.
+                move_mtime: Optional[float] = None
+                try:
+                    move_mtime = os.path.getmtime(normalized_destination)
+                except (FileNotFoundError, PermissionError):
+                    pass
+                self.path_watcher._handle_file_event(
+                    FileEvent.MOVED, source_path, destination_path, move_mtime
+                )
+                self.echo(f"File moved: {source_path} -> {destination_path}")
+                return
+            return
 
         if event_type == FileEvent.DELETED:
             # DO NOT remove file from monitored_files here.
@@ -391,7 +448,9 @@ class FileChangeHandler(FileSystemEventHandler):
             # monitored_files entry is stale until the editor closes. This is
             # an acceptable resource cost (one string per open file) that avoids
             # the far worse UX of silent stale content after atomic writes.
-            self.path_watcher._handle_file_event(FileEvent.DELETED, source_path, None, None)
+            self.path_watcher._handle_file_event(
+                FileEvent.DELETED, source_path, None, None
+            )
             self.echo(f"File deleted: {source_path}")
             return
 
@@ -401,11 +460,17 @@ class FileChangeHandler(FileSystemEventHandler):
         except (FileNotFoundError, PermissionError) as e:
             self.echo(f"Could not access mtime for {source_path}: {e}")
             if not os.path.exists(source_path):
-                self.path_watcher._handle_file_event(FileEvent.DELETED, source_path, None, None)
+                self.path_watcher._handle_file_event(
+                    FileEvent.DELETED, source_path, None, None
+                )
                 return
 
-        self.path_watcher._handle_file_event(event_type, source_path, destination_path, mtime)
-        self.echo(f"Handled change event: {event_type.name} on {source_path} with mtime {mtime}")
+        self.path_watcher._handle_file_event(
+            event_type, source_path, destination_path, mtime
+        )
+        self.echo(
+            f"Handled change event: {event_type.name} on {source_path} with mtime {mtime}"
+        )
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
