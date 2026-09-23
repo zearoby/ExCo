@@ -25,6 +25,7 @@ import time
 import traceback
 import webbrowser
 from typing import *
+from types import TracebackType
 
 import constants
 import data
@@ -56,26 +57,40 @@ def create_thread(func, *args):
 icon_cache = {}
 
 
-def create_icon(icon):
+def create_icon(icon: Union[qt.QPixmap, str]) -> qt.QIcon:
     """
     Function for initializing and returning an QIcon object
+
+    :param icon: Either a QPixmap object or a string file path.
+    :return: A QIcon object initialized from the input.
     """
     # Pixmap
     if isinstance(icon, qt.QPixmap):
-        new_icon = qt.QIcon(icon)
+        new_icon: qt.QIcon = qt.QIcon(icon)
     # Path
     elif isinstance(icon, str):
-        full_icon_path = unixify_join(data.resources_directory, icon)
+        full_icon_path: str = unixify_join(data.resources_directory, icon)
+
+        # Check cache
         if full_icon_path in icon_cache.keys():
-            cached_icon = icon_cache[full_icon_path]
+            # The cached_icon might be a QIcon or QPixmap depending on how
+            # the cache is managed, but we assume it can be used to construct a QIcon.
+            cached_icon: Any = icon_cache[full_icon_path]
             return qt.QIcon(cached_icon)
+
+        # Check file existence
         if not os.path.isfile(full_icon_path):
             raise Exception("Icon file doesn't exist: {}".format(full_icon_path))
+
+        # Initialize from path and cache it
         new_icon = qt.QIcon(full_icon_path)
         icon_cache[full_icon_path] = new_icon
     # Unknown
     else:
+        # This branch should technically be unreachable if type checking is used,
+        # but it remains for runtime safety and handles any unexpected object types.
         raise Exception("Unknown icon construction type: {}".format(icon))
+
     return new_icon
 
 
@@ -112,13 +127,9 @@ def create_pixmap_with_size(pixmap_name, width=None, height=None):
     """
     pixmap = create_pixmap(pixmap_name)
     if width:
-        pixmap = pixmap.scaledToWidth(
-            int(width), qt.Qt.TransformationMode.SmoothTransformation
-        )
+        pixmap = pixmap.scaledToWidth(int(width), qt.Qt.TransformationMode.SmoothTransformation)
     if height:
-        pixmap = pixmap.scaledToHeight(
-            int(height), qt.Qt.TransformationMode.SmoothTransformation
-        )
+        pixmap = pixmap.scaledToHeight(int(height), qt.Qt.TransformationMode.SmoothTransformation)
     return pixmap
 
 
@@ -150,101 +161,88 @@ def ovarlay_images(base_path, overlay_path):
     return base_pixmap
 
 
-def get_language_file_icon(language_name):
+__LANGUAGE_ICON_MAP = {
+    # Primary names (lowercase, normalized)
+    "python": "language_icons/logo_python.png",
+    "cython": "language_icons/logo_cython.png",
+    "c": "language_icons/logo_c.png",
+    "awk": "language_icons/logo_awk.png",
+    "c++": "language_icons/logo_cpp.png",
+    "cpp": "language_icons/logo_cpp.png",  # alias
+    "c / c++": "language_icons/logo_c_cpp.png",
+    "cicode": "language_icons/logo_cicode.png",
+    "oberon / modula": "language_icons/logo_oberon.png",
+    "d": "language_icons/logo_d.png",
+    "nim": "language_icons/logo_nim.png",
+    "ada": "language_icons/logo_ada.png",
+    "cmake": "language_icons/logo_cmake.png",
+    "css": "language_icons/logo_css.png",
+    "html": "language_icons/logo_html.png",
+    "json": "language_icons/logo_json.png",
+    "lua": "language_icons/logo_lua.png",
+    "matlab": "language_icons/logo_matlab.png",
+    "perl": "language_icons/logo_perl.png",
+    "ruby": "language_icons/logo_ruby.png",
+    "tcl": "language_icons/logo_tcl.png",
+    "tex": "language_icons/logo_tex.png",
+    "idl": "language_icons/logo_idl.png",
+    "bash": "language_icons/logo_bash.png",
+    "batch": "language_icons/logo_batch.png",
+    "fortran": "language_icons/logo_fortran.png",
+    "fortran77": "language_icons/logo_fortran77.png",
+    "coffeescript": "language_icons/logo_coffeescript.png",
+    "c#": "language_icons/logo_csharp.png",
+    "csharp": "language_icons/logo_csharp.png",  # alias
+    "cs": "language_icons/logo_csharp.png",  # another alias
+    "java": "language_icons/logo_java.png",
+    "javascript": "language_icons/logo_javascript.png",
+    "js": "language_icons/logo_javascript.png",  # alias
+    "makefile": "language_icons/logo_makefile.png",
+    "octave": "language_icons/logo_octave.png",
+    "pascal": "language_icons/logo_pascal.png",
+    "postscript": "language_icons/logo_postscript.png",
+    "routeros": "language_icons/logo_routeros.png",
+    "spice": "language_icons/logo_spice.png",
+    "sql": "language_icons/logo_sql.png",
+    "verilog": "language_icons/logo_verilog.png",
+    "vhdl": "language_icons/logo_vhdl.png",
+    "xml": "language_icons/logo_xml.png",
+    "yaml": "language_icons/logo_yaml.png",
+    "zig": "language_icons/logo_zig.png",
+    "rust": "language_icons/logo_rust.png",
+    "go": "language_icons/logo_go.png",
+    # Generic configs/data
+    "ini": "tango_icons/document-properties.png",
+    # Fallbacks
+    "text": "tango_icons/text-x-generic.png",
+}
+
+# Default fallback icon
+__FALLBACK_ICON = "tango_icons/file.png"
+
+
+def get_language_file_icon(language_name: str) -> str:
     """
-    Function for getting the programming language icon from the language name
+    Get the appropriate icon path for a given programming language name.
+
+    Normalizes input (case-insensitive, strips whitespace), supports aliases,
+    and falls back to a generic file icon if unknown.
+
+    Args:
+        language_name: Name of the programming language (e.g., 'Python', 'C++').
+
+    Returns:
+        Path to the icon file (string).
     """
-    language_name = language_name.lower()
-    if language_name == "python":
-        return create_icon("language_icons/logo_python.png")
-    elif language_name == "cython":
-        return create_icon("language_icons/logo_cython.png")
-    elif language_name == "c":
-        return create_icon("language_icons/logo_c.png")
-    elif language_name == "awk":
-        return create_icon("language_icons/logo_awk.png")
-    elif language_name == "c++":
-        return create_icon("language_icons/logo_cpp.png")
-    elif language_name == "c / c++":
-        return create_icon("language_icons/logo_c_cpp.png")
-    elif language_name == "cicode":
-        return create_icon("language_icons/logo_cicode.png")
-    elif language_name == "oberon / modula":
-        return create_icon("language_icons/logo_oberon.png")
-    elif language_name == "d":
-        return create_icon("language_icons/logo_d.png")
-    elif language_name == "nim":
-        return create_icon("language_icons/logo_nim.png")
-    elif language_name == "ada":
-        return create_icon("language_icons/logo_ada.png")
-    elif language_name == "cmake":
-        return create_icon("language_icons/logo_cmake.png")
-    elif language_name == "css":
-        return create_icon("language_icons/logo_css.png")
-    elif language_name == "html":
-        return create_icon("language_icons/logo_html.png")
-    elif language_name == "json":
-        return create_icon("language_icons/logo_json.png")
-    elif language_name == "lua":
-        return create_icon("language_icons/logo_lua.png")
-    elif language_name == "matlab":
-        return create_icon("language_icons/logo_matlab.png")
-    elif language_name == "perl":
-        return create_icon("language_icons/logo_perl.png")
-    elif language_name == "ruby":
-        return create_icon("language_icons/logo_ruby.png")
-    elif language_name == "tcl":
-        return create_icon("language_icons/logo_tcl.png")
-    elif language_name == "tex":
-        return create_icon("language_icons/logo_tex.png")
-    elif language_name == "idl":
-        return create_icon("language_icons/logo_idl.png")
-    elif language_name == "bash":
-        return create_icon("language_icons/logo_bash.png")
-    elif language_name == "batch":
-        return create_icon("language_icons/logo_batch.png")
-    elif language_name == "fortran":
-        return create_icon("language_icons/logo_fortran.png")
-    elif language_name == "fortran77":
-        return create_icon("language_icons/logo_fortran77.png")
-    elif language_name == "ini" or language_name == "makefile":
-        return create_icon("tango_icons/document-properties.png")
-    elif language_name == "coffeescript":
-        return create_icon("language_icons/logo_coffeescript.png")
-    elif language_name == "c#":
-        return create_icon("language_icons/logo_csharp.png")
-    elif language_name == "java":
-        return create_icon("language_icons/logo_java.png")
-    elif language_name == "javascript":
-        return create_icon("language_icons/logo_javascript.png")
-    elif language_name == "makefile":
-        return create_icon("language_icons/logo_makefile.png")
-    elif language_name == "octave":
-        return create_icon("language_icons/logo_octave.png")
-    elif language_name == "pascal":
-        return create_icon("language_icons/logo_pascal.png")
-    elif language_name == "postscript":
-        return create_icon("language_icons/logo_postscript.png")
-    elif language_name == "routeros":
-        return create_icon("language_icons/logo_routeros.png")
-    elif language_name == "spice":
-        return create_icon("language_icons/logo_spice.png")
-    elif language_name == "sql":
-        return create_icon("language_icons/logo_sql.png")
-    elif language_name == "verilog":
-        return create_icon("language_icons/logo_verilog.png")
-    elif language_name == "vhdl":
-        return create_icon("language_icons/logo_vhdl.png")
-    elif language_name == "xml":
-        return create_icon("language_icons/logo_xml.png")
-    elif language_name == "yaml":
-        return create_icon("language_icons/logo_yaml.png")
-    elif language_name == "zig":
-        return create_icon("language_icons/logo_zig.png")
-    elif language_name == "text":
-        return create_icon("tango_icons/text-x-generic.png")
-    else:
-        return create_icon("tango_icons/file.png")
+    if not isinstance(language_name, str):
+        language_name = str(language_name)
+
+    # Normalize: lowercase, strip, and replace common variants
+    key = language_name.strip().lower()
+
+    # Look up; fallback to default
+    icon_path = __LANGUAGE_ICON_MAP.get(key, __FALLBACK_ICON)
+    return create_icon(icon_path)
 
 
 def create_language_document_icon_from_path(path, check_content=True):
@@ -335,9 +333,7 @@ def get_nim_node_tree(nim_code):
     # Nested function for finding the closing parenthesis of parameter definitions
     def get_closing_parenthesis(current_step, lines):
         for ln in range(current_step, len(lines)):
-            if ")" in lines[ln] and (
-                lines[ln].count(")") == (lines[ln].count("(") + 1)
-            ):
+            if ")" in lines[ln] and (lines[ln].count(")") == (lines[ln].count("(") + 1)):
                 return ln
         else:
             return None
@@ -382,9 +378,7 @@ def get_nim_node_tree(nim_code):
                     parameter_string = ""
                     open_index = line_list[current_line_number].find("(") + 1
                     parameter_string += line_list[current_line_number][open_index:]
-                    for i in range(
-                        current_line_number + 1, body_starting_line_number + 1
-                    ):
+                    for i in range(current_line_number + 1, body_starting_line_number + 1):
                         if ")" in line_list[i] and (
                             line_list[i].count(")") == (line_list[i].count("(") + 1)
                         ):
@@ -392,39 +386,27 @@ def get_nim_node_tree(nim_code):
                             current_parameter = line_list[i][:close_index].strip()
                             # Filter out the parameter initialization
                             if "=" in current_parameter:
-                                current_parameter = current_parameter[
-                                    : current_parameter.find("=")
-                                ]
+                                current_parameter = current_parameter[: current_parameter.find("=")]
                             parameter_string += current_parameter
                         else:
                             current_parameter = line_list[i].strip()
                             # Filter out the parameter initialization
                             if "=" in current_parameter:
-                                current_parameter = current_parameter[
-                                    : current_parameter.find("=")
-                                ]
+                                current_parameter = current_parameter[: current_parameter.find("=")]
                             parameter_string += current_parameter
                     parameters = [
-                        par.strip()
-                        for par in parameter_string.split(",")
-                        if par.strip() != ""
+                        par.strip() for par in parameter_string.split(",") if par.strip() != ""
                     ]
                     # Check the return type
-                    split_line = line_list[body_starting_line_number][
-                        close_index:
-                    ].split(":")
+                    split_line = line_list[body_starting_line_number][close_index:].split(":")
                     if len(split_line) > 1:
                         return_type = split_line[1].replace("=", "")
                         return_type = return_type.strip()
                 else:
                     open_index = line_list[current_line_number].find("(") + 1
                     close_index = line_list[current_line_number].find(")")
-                    parameter_string = line_list[current_line_number][
-                        open_index:close_index
-                    ]
-                    parameters = [
-                        par for par in parameter_string.split(",") if par.strip() != ""
-                    ]
+                    parameter_string = line_list[current_line_number][open_index:close_index]
+                    parameters = [par for par in parameter_string.split(",") if par.strip() != ""]
                     # Check the return type
                     split_line = line_list[current_line_number][close_index:].split(":")
                     if len(split_line) > 1:
@@ -446,10 +428,7 @@ def get_nim_node_tree(nim_code):
         if "=" in current_line and current_line.strip().endswith("="):
             # Check if the declaration is a one-liner
             if (current_line.strip().endswith("=") == False) and (
-                (
-                    len(current_line.split("=")) == 2
-                    and current_line.split("=")[1].strip() != ""
-                )
+                (len(current_line.split("=")) == 2 and current_line.split("=")[1].strip() != "")
                 or (
                     len(current_line.split("=")) > 2
                     and current_line[current_line.rfind(")") :].split("=")[1] != ""
@@ -464,15 +443,10 @@ def get_nim_node_tree(nim_code):
                     starting_line_number = body_starting_line_number + 1
                 # Parse the procedure for its local child nodes
                 sub_node_lines = []
-                compare_indentation = get_next_blocks_indentation(
-                    starting_line_number, line_list
-                )
+                compare_indentation = get_next_blocks_indentation(starting_line_number, line_list)
                 for ln in range(starting_line_number, len(line_list)):
                     # Skip empty lines
-                    if (
-                        line_list[ln].strip() == ""
-                        or line_list[ln].strip().startswith("#") == True
-                    ):
+                    if line_list[ln].strip() == "" or line_list[ln].strip().startswith("#") == True:
                         # Add the blank space at the correct indentation level
                         # to have the correct number of lines in the list
                         sub_node_lines.append(" " * compare_indentation)
@@ -488,13 +462,9 @@ def get_nim_node_tree(nim_code):
                     # For loop looped through all of the lines, skip them
                     local_skip_to_line = len(line_list) - 1
                 starting_line_number += previous_offset
-                node = parse_node(
-                    node, sub_node_lines, line_offset=starting_line_number
-                )
+                node = parse_node(node, sub_node_lines, line_offset=starting_line_number)
         elif (
-            search_string == "class"
-            or search_string == "namespace"
-            or search_string == "property"
+            search_string == "class" or search_string == "namespace" or search_string == "property"
         ):
             """special macro identifiers: class, namespace, ..."""
             # Adjust the procedure body starting line as needed
@@ -503,15 +473,10 @@ def get_nim_node_tree(nim_code):
                 starting_line_number = body_starting_line_number + 1
             # Parse the procedure for its local child nodes
             sub_node_lines = []
-            compare_indentation = get_next_blocks_indentation(
-                starting_line_number, line_list
-            )
+            compare_indentation = get_next_blocks_indentation(starting_line_number, line_list)
             for ln in range(starting_line_number, len(line_list)):
                 # Skip empty lines
-                if (
-                    line_list[ln].strip() == ""
-                    or line_list[ln].strip().startswith("#") == True
-                ):
+                if line_list[ln].strip() == "" or line_list[ln].strip().startswith("#") == True:
                     # Add the blank space at the correct indentation level
                     # to have the correct number of lines in the list
                     sub_node_lines.append(" " * compare_indentation)
@@ -648,11 +613,7 @@ def get_nim_node_tree(nim_code):
                     let_statement = False
             elif var_statement == True:
                 if current_indentation == compare_indentation:
-                    if (
-                        ":" in line
-                        and "=" in line
-                        and (line.find(":") < line.find("="))
-                    ):
+                    if ":" in line and "=" in line and (line.find(":") < line.find("=")):
                         type = line.split(":")[1].split("=")[0].strip()
                         line = line.split(":")[0].strip()
                     elif ":" in line and not ("=" in line):
@@ -695,9 +656,7 @@ def get_nim_node_tree(nim_code):
             if line.startswith("import ") or line == "import":
                 if line == "import":
                     import_statement = True
-                    compare_indentation = get_next_blocks_indentation(
-                        line_count + 1, code_lines
-                    )
+                    compare_indentation = get_next_blocks_indentation(line_count + 1, code_lines)
                 else:
                     line = line.replace("import", "")
                     for module in line.split(","):
@@ -711,9 +670,7 @@ def get_nim_node_tree(nim_code):
             elif line.startswith("type ") or line == "type":
                 if line == "type":
                     type_statement = True
-                    compare_indentation = get_next_blocks_indentation(
-                        line_count + 1, code_lines
-                    )
+                    compare_indentation = get_next_blocks_indentation(line_count + 1, code_lines)
                 else:
                     line = line.replace("type", "")
                     type_node = NimNode()
@@ -724,9 +681,7 @@ def get_nim_node_tree(nim_code):
             elif line.startswith("const ") or line == "const":
                 if line == "const":
                     const_statement = True
-                    compare_indentation = get_next_blocks_indentation(
-                        line_count + 1, code_lines
-                    )
+                    compare_indentation = get_next_blocks_indentation(line_count + 1, code_lines)
                 else:
                     line = line.replace("const", "")
                     const_node = NimNode()
@@ -742,9 +697,7 @@ def get_nim_node_tree(nim_code):
             elif line.startswith("let ") or line == "let":
                 if line == "let":
                     let_statement = True
-                    compare_indentation = get_next_blocks_indentation(
-                        line_count + 1, code_lines
-                    )
+                    compare_indentation = get_next_blocks_indentation(line_count + 1, code_lines)
                 else:
                     line = line.replace("let", "")
                     let_node = NimNode()
@@ -760,16 +713,10 @@ def get_nim_node_tree(nim_code):
             elif line.startswith("var ") or line == "var":
                 if line == "var":
                     var_statement = True
-                    compare_indentation = get_next_blocks_indentation(
-                        line_count + 1, code_lines
-                    )
+                    compare_indentation = get_next_blocks_indentation(line_count + 1, code_lines)
                 else:
                     line = line.replace("var", "")
-                    if (
-                        ":" in line
-                        and "=" in line
-                        and (line.find(":") < line.find("="))
-                    ):
+                    if ":" in line and "=" in line and (line.find(":") < line.find("=")):
                         type = line.split(":")[1].split("=")[0].strip()
                         line = line.split(":")[0].strip()
                     elif ":" in line and not ("=" in line):
@@ -942,9 +889,7 @@ def get_python_node_list(python_code):
     nodes = [node for node in ast.walk(parsed_string)]
     # Get import/import_from nodes, combine them into one list and sort them
     import_nodes = [
-        (node.names[0].name, node.lineno)
-        for node in nodes
-        if isinstance(node, ast.Import)
+        (node.names[0].name, node.lineno) for node in nodes if isinstance(node, ast.Import)
     ]
     importfrom_nodes = [
         (node.module, node.lineno) for node in nodes if isinstance(node, ast.ImportFrom)
@@ -1027,18 +972,14 @@ def get_python_node_tree(python_code):
                         )
                         globals_list.append(name)
             return new_nodes
-        elif isinstance(ast_node, ast.AnnAssign) and (
-            level == 0 or parent_node == None
-        ):
+        elif isinstance(ast_node, ast.AnnAssign) and (level == 0 or parent_node == None):
             # Type annotated globals
             new_nodes = []
             target = ast_node.target
             if hasattr(target, "id") == True:
                 name = target.id
                 if not (name in globals_list):
-                    new_nodes.append(
-                        PythonNode(name, "global_variable", ast_node.lineno, level)
-                    )
+                    new_nodes.append(PythonNode(name, "global_variable", ast_node.lineno, level))
                     globals_list.append(name)
             return new_nodes
         elif isinstance(ast_node, ast.Global):
@@ -1060,9 +1001,7 @@ def get_python_node_tree(python_code):
                                 parent_node.children.append(n)
                         else:
                             parent_node.children.append(result)
-                parent_node.children = sorted(
-                    parent_node.children, key=lambda x: x.name
-                )
+                parent_node.children = sorted(parent_node.children, key=lambda x: x.name)
             else:
                 new_nodes = []
                 if hasattr(ast_node, "body"):
@@ -1235,19 +1174,11 @@ def get_c_function_list(c_code):
                 if token == "{" and previous_token == ")":
                     # The function has passed the filter, add it to the list
                     function_list.append((last_found_function, last_line))
-                elif (
-                    token == "("
-                    and re.match(r"\w", previous_token)
-                    and parenthesis_count == 0
-                ):
+                elif token == "(" and re.match(r"\w", previous_token) and parenthesis_count == 0:
                     last_found_function = previous_token
                     last_line = current_line
         # Check for various state changes
-        if (
-            multiline_commenting == False
-            and singleline_commenting == False
-            and stringing == False
-        ):
+        if multiline_commenting == False and singleline_commenting == False and stringing == False:
             if token == "{":
                 curly_count += 1
             elif token == "}":
@@ -1340,9 +1271,7 @@ def get_node_tree_with_ctags(code, parser):
                     [ctags_program, "--version"], stdout=subprocess.PIPE, shell=False
                 ).communicate()[0]
             output_utf = output.decode("utf-8")
-            if output_utf.startswith("Exuberant Ctags") or output_utf.startswith(
-                "Universal Ctags"
-            ):
+            if output_utf.startswith("Exuberant Ctags") or output_utf.startswith("Universal Ctags"):
                 ctags_present = True
         except Exception as ex:
             if data.platform == "Windows":
@@ -1674,30 +1603,22 @@ def get_c_node_tree(c_code):
                         add_node(CNode(include_string, "include", macro_line, 0))
                     elif macro_type == "define":
                         define_macro = macro_tokens[0]
-                        debug_print(
-                            level, "Found define:\n", (level + 1) * "    ", define_macro
-                        )
+                        debug_print(level, "Found define:\n", (level + 1) * "    ", define_macro)
                         add_node(CNode(define_macro, "define", macro_line, 0))
                     elif macro_type == "undef":
                         undef_macro = macro_tokens[0]
-                        debug_print(
-                            level, "Found undef:\n", (level + 1) * "    ", undef_macro
-                        )
+                        debug_print(level, "Found undef:\n", (level + 1) * "    ", undef_macro)
                         add_node(CNode(undef_macro, "undef", macro_line, 0))
                     elif macro_type == "pragma":
                         pragma_macro = macro_tokens[0]
                         # Watcom compiler 'aux' keyword check
                         if pragma_macro == "aux":
                             pragma_macro = macro_tokens[1]
-                        debug_print(
-                            level, "Found pragma:\n", (level + 1) * "    ", pragma_macro
-                        )
+                        debug_print(level, "Found pragma:\n", (level + 1) * "    ", pragma_macro)
                         add_node(CNode(pragma_macro, "pragma", macro_line, 0))
                     elif macro_type == "error":
                         error_macro = " ".join(macro_tokens)[:10] + "..."
-                        debug_print(
-                            level, "Found error:\n", (level + 1) * "    ", error_macro
-                        )
+                        debug_print(level, "Found error:\n", (level + 1) * "    ", error_macro)
                         add_node(CNode(error_macro, "error", macro_line, 0))
                     # Reset the macroing flag
                     macro_tokens = []
@@ -1817,15 +1738,9 @@ def get_c_node_tree(c_code):
                                     prototype,
                                 )
                             elif length == 3:
-                                if (
-                                    "(" in result[1]
-                                    and ")" in result[1]
-                                    and (level == 0)
-                                ):
+                                if "(" in result[1] and ")" in result[1] and (level == 0):
                                     prototype = result[1][: result[1].find("(")]
-                                    add_node(
-                                        CNode(prototype, "prototype", current_line, 0)
-                                    )
+                                    add_node(CNode(prototype, "prototype", current_line, 0))
                                     debug_print(
                                         level,
                                         "Found prototype 1:\n",
@@ -1869,20 +1784,14 @@ def get_c_node_tree(c_code):
                                             else:
                                                 var_name = g[-1]
                                         if var_name.isidentifier():
-                                            add_node(
-                                                CNode(var_name, "var", current_line, 0)
-                                            )
+                                            add_node(CNode(var_name, "var", current_line, 0))
                                             debug_print(
                                                 level,
                                                 "Found variable 1:\n",
                                                 (level + 1) * "    ",
                                                 var_name,
                                             )
-                            elif (
-                                result[-2].isidentifier()
-                                and not ("=" in result)
-                                and (level == 0)
-                            ):
+                            elif result[-2].isidentifier() and not ("=" in result) and (level == 0):
                                 variable = result[-2]
                                 add_node(CNode(variable, "var", current_line, 0))
                                 debug_print(
@@ -1977,9 +1886,7 @@ def get_c_node_tree(c_code):
                     )
                     current_statement_tokens.append("{ ... }")
                     if func_found:
-                        debug_print(
-                            level, "function end '{}':".format(func_name), skip_to_token
-                        )
+                        debug_print(level, "function end '{}':".format(func_name), skip_to_token)
                         current_statement_tokens = []
                 elif token == "}" and previous_token != "'" and next_token != "'":
                     return node_list, i + index
@@ -2042,9 +1949,7 @@ def get_c_node_tree(c_code):
         # Return the accumulated node list
         return node_list, skip_to_token
 
-    main_node_list, skip_to_token = parse_loop(
-        main_tokens, main_node_list, main_current_line, 0, 0
-    )
+    main_node_list, skip_to_token = parse_loop(main_tokens, main_node_list, main_current_line, 0, 0)
 
     # Sort the nodes alphabetically
     def compare_function(item):
@@ -2073,8 +1978,7 @@ def index_strings_in_linelist(search_text, list_of_lines, case_sensitive=False):
     # Check for and extend the list with all matches
     for i, line in enumerate(list_of_lines):
         line_matches = [
-            (i, match.start(), i, match.end())
-            for match in re.finditer(compiled_search_re, line)
+            (i, match.start(), i, match.end()) for match in re.finditer(compiled_search_re, line)
         ]
         list_of_matches.extend(line_matches)
     return list_of_matches
@@ -2123,8 +2027,7 @@ def index_strings_in_text(
         compiled_search_re = re.compile(search_text, re.IGNORECASE)
     # Create the list with all of the matches
     list_of_matches = [
-        (0, match.start(), 0, match.end())
-        for match in re.finditer(compiled_search_re, text)
+        (0, match.start(), 0, match.end()) for match in re.finditer(compiled_search_re, text)
     ]
     return list_of_matches
 
@@ -2335,12 +2238,22 @@ def unixify_path(path):
     return os.path.realpath(path).replace("\\", "/")
 
 
+def unixify_path_keep_symlink(path):
+    # Same as unixify_path but WITHOUT os.path.realpath, so symlinks/junctions
+    # keep their link path instead of being resolved to their target.
+    return os.path.abspath(path).replace("\\", "/")
+
+
 def unixify_join(*paths) -> str:
     return unixify_path(os.path.join(*paths))
 
 
 def unixify_remove(whole_path, path_to_remove) -> str:
     return unixify_path(os.path.relpath(whole_path, path_to_remove))
+
+
+def normalize_path(path: str) -> str:
+    return os.path.normpath(os.path.normcase(os.path.abspath(path)))
 
 
 def change_icon_opacity(qicon, opacity):
@@ -2417,6 +2330,49 @@ def create_size(*args):
         raise Exception("[functions.create_point] Unknown arguments: {}".format(args))
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    """Clamp `value` to the inclusive [low, high] range."""
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
+
+
+def ratio_split_sizes(total: int, ratio: float) -> tuple[int, int]:
+    """
+    Split `total` pixels into (new_pane, existing_pane) integer sizes.
+    `ratio` (0..1) is the share given to the new pane and is clamped to
+    [0.05, 0.95] so neither pane can vanish; the two results always sum to `total`.
+    """
+    new_share = int(round(total * clamp(ratio, 0.05, 0.95)))
+    return (new_share, total - new_share)
+
+
+def scale_fractions(fractions: list[float], total: int) -> list[int]:
+    """
+    Scale normalized fractions to exactly `total` pixels.
+    The returned integer sizes always sum to `total`; any rounding remainder
+    is absorbed by the largest pane.
+    """
+    scaled = [int(round(f * total)) for f in fractions]
+    remainder = total - sum(scaled)
+    if remainder:
+        scaled[scaled.index(max(scaled))] += remainder
+    return scaled
+
+
+def integer_split(total: int, count: int) -> list[int]:
+    """
+    Split `total` pixels into `count` integer sizes whose sum equals `total`.
+    The remainder is spread over the leading panes (e.g. 10 / 3 -> [4, 3, 3]).
+    """
+    if count <= 0:
+        return []
+    base, remainder = divmod(total, count)
+    return [base + 1] * remainder + [base] * (count - remainder)
+
+
 PERFORMANCE_MEASURING_FLAG = True
 
 
@@ -2441,11 +2397,7 @@ def performance_timer_show(text=None):
         end_count = current_point - performance_timer_starting_count
         diff_count = current_point - performance_timer_last_point
         performance_timer_last_point = current_point
-        print(
-            "Time: {:.4f}s / diff: {:.4f} -> [{}]".format(
-                end_count, diff_count, info_text
-            )
-        )
+        print("Time: {:.4f}s / diff: {:.4f} -> [{}]".format(end_count, diff_count, info_text))
     except:
         print("[{}] Error!".format(info_text))
 
@@ -2526,9 +2478,7 @@ Docking system helpers
 """
 
 
-def right_replace(
-    text: str, old_substring: str, new_substring: str, max_occurrences: int
-) -> str:
+def right_replace(text: str, old_substring: str, new_substring: str, max_occurrences: int) -> str:
     """
     Replaces the rightmost occurrences of a substring in a given text.
     """
@@ -2575,9 +2525,7 @@ def output_get_file_with_timestamp() -> str:
     sf = os.path.splitext(OUTPUT_FILENAME)
     return os.path.join(
         output_get_backup_directory(),
-        OUTPUT_FILENAME.replace(
-            sf[1], get_default_datetime_formatted_string() + ".txt"
-        ),
+        OUTPUT_FILENAME.replace(sf[1], get_default_datetime_formatted_string() + ".txt"),
     )
 
 
@@ -2598,12 +2546,12 @@ def output_redirect() -> None:
     output_file: str = output_get_file()
 
     # Open file and redirect output
-    f = open(output_file, "w+", encoding="utf-8", newline="\n", errors="replace")
+    f: TextIOWrapper = open(output_file, "w+", encoding="utf-8", newline="\n", errors="replace")
     sys.stdout = f
     sys.stderr = f
 
     # Adapt exception hook for all threads
-    def exception_hook(exctype, value, trace) -> None:
+    def exception_hook(exctype: type, value: BaseException, trace: TracebackType) -> None:
         print("-" * 80)
         print(
             "".join(traceback.format_exception(exctype, value, trace)),
@@ -2611,7 +2559,12 @@ def output_redirect() -> None:
         )
         print("-" * 80)
         qt.QApplication.quit()
-        f.close()
+        # Close file properly
+        if hasattr(sys.stdout, "close"):
+            sys.stdout.close()
+        # Restore original streams before backup
+        sys.stdout = original_output_stream
+        sys.stderr = original_error_stream
         # Create backup with timestamp
         output_file_with_date: str = output_get_file_with_timestamp()
         shutil.copy(output_file, output_file_with_date)
@@ -2619,11 +2572,11 @@ def output_redirect() -> None:
     sys.excepthook = exception_hook
     init_original: Callable = threading.Thread.__init__
 
-    def init(self, *args, **kwargs) -> None:
+    def init(self: threading.Thread, *args: Any, **kwargs: Any) -> None:
         init_original(self, *args, **kwargs)
-        run_original = self.run
+        run_original: Callable = self.run
 
-        def run_with_except_hook(*args2, **kwargs2):
+        def run_with_except_hook(*args2: Any, **kwargs2: Any) -> None:
             try:
                 run_original(*args2, **kwargs2)
             except Exception:
@@ -2639,7 +2592,14 @@ def output_backup() -> None:
     output_file: str = output_get_file()
     # Create backup with timestamp
     output_file_with_date: str = output_get_file_with_timestamp()
-    shutil.copy(output_file, output_file_with_date)
+
+    # Check if the file exists and has content before copying
+    try:
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            shutil.copy(output_file, output_file_with_date)
+    except (OSError, IOError):
+        # Handle potential file access errors silently
+        traceback.print_exc()
 
 
 def reorganize_imports(import_code: str) -> str:
@@ -2738,9 +2698,7 @@ def get_used_symbols(code: str) -> Set[str]:
 
         class NameVisitor(ast.NodeVisitor):
             def visit_Name(self, node):
-                if isinstance(
-                    node.ctx, ast.Load
-                ):  # Only count when reading/using the name
+                if isinstance(node.ctx, ast.Load):  # Only count when reading/using the name
                     used_symbols.add(node.id)
                 self.generic_visit(node)
 

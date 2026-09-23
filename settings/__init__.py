@@ -6,7 +6,7 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import qt
 import themes
@@ -19,6 +19,21 @@ __theme_cache: Dict[str, Dict[str, Any]] = {}
 
 def get(name: str) -> Any:
     return __settings_manipulator.get(name)
+
+
+def connect_change(callback: Callable[[str, Any], None]) -> None:
+    """
+    Register a callback to be invoked as callback(key, value) whenever a
+    setting is changed anywhere through the settings facade.
+    """
+    __settings_manipulator.add_change_listener(callback)
+
+
+def disconnect_change(callback: Callable[[str, Any], None]) -> None:
+    """
+    Unregister a previously registered settings change callback.
+    """
+    __settings_manipulator.remove_change_listener(callback)
 
 
 def get_theme() -> dict:
@@ -54,7 +69,7 @@ def get_editor_font():
 # This list specifies the names under which the functionality will be
 # exposed as global functions in the current module's namespace.
 # These names form the 'exposed API'.
-exposed_api_names = ["load", "save", "save_last_layout", "add_recent_file"]
+exposed_api_names = ["load", "save_last_layout", "add_recent_file"]
 
 # This list maps the desired exposed API names to the actual method names
 # on the internal object (which is assumed to be __settings_manipulator).
@@ -62,7 +77,6 @@ exposed_api_names = ["load", "save", "save_last_layout", "add_recent_file"]
 # 'exposed_function' is the name it will be given in the current global scope.
 exposed_api_map = [
     {"method": "load_settings", "exposed_function": "load"},
-    {"method": "save_settings", "exposed_function": "save"},
     {"method": "save_last_layout", "exposed_function": "save_last_layout"},
     {"method": "add_recent_file", "exposed_function": "add_recent_file"},
 ]
@@ -70,7 +84,7 @@ exposed_api_map = [
 # --- Dynamic Function Definition ---
 
 # It is assumed that an instance of a settings handler class,
-# which contains the actual logic (e.g., load_settings, save_settings),
+# which contains the actual logic (e.g., load_settings),
 # has been instantiated and assigned to a private/internal variable like:
 # __settings_manipulator = SettingsManipulatorClass(...)
 

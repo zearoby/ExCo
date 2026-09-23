@@ -6,6 +6,10 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import keyword
 import builtins
 import re
@@ -15,22 +19,30 @@ import data
 import settings
 import time
 import lexers
+from lexers.baselexer import BaseLexer
 
 
-class CiCode(qt.QsciLexerCustom):
+class CiCode(BaseLexer):
     """
     Custom lexer for the Citect CiCode programming language
     """
 
     class Sequence:
-        def __init__(self, start, stop_sequences, stop_characters, style, add_to_style):
+        def __init__(
+            self,
+            start: str,
+            stop_sequences: list[str],
+            stop_characters: list[str],
+            style: int,
+            add_to_style: int,
+        ) -> None:
             self.start = start
             self.stop_sequences = stop_sequences
             self.stop_characters = stop_characters
             self.style = style
             self.add_to_style = add_to_style
 
-    styles = {
+    styles: dict[str, int] = {
         "Default": 0,
         "Comment": 1,
         "MultilineComment": 2,
@@ -1207,9 +1219,6 @@ class CiCode(qt.QsciLexerCustom):
     def braceStyle(self):
         return self.styles["Default"]
 
-    def defaultFont(self, style):
-        return qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
-
     def set_theme(self, theme):
         for style in self.styles:
             # Papers
@@ -1248,8 +1257,7 @@ class CiCode(qt.QsciLexerCustom):
         multiline_commenting = False
         sequence = None
         tokens = [
-            (token.lower(), len(bytearray(token, "utf-8")))
-            for token in self.splitter.findall(text)
+            (token.lower(), len(bytearray(token, "utf-8"))) for token in self.splitter.findall(text)
         ]
 
         # Check if there is a style(comment, string, ...) stretching on from the previous line

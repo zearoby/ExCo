@@ -37,9 +37,7 @@ editor = {
         "edge_marker_column": 90,
         "edge_marker_visible": False,
         "end_of_line_mode": 2,
-        "end_of_line_visibility": False,
         "maximum_highlights": 300,
-        "overwrite_mode": False,
         "tab_width": 4,
         "word_wrap": False,
         "zoom_factor": 0,
@@ -320,6 +318,12 @@ default_settings = {
         data.settings_directory, "repl_history.ini"
     ),
     "terminal": "x-terminal-emulator",  # Terminal console program used on GNU/Linux
+    "terminal-shell": "cmd.exe"
+    if data.on_windows
+    else "/bin/bash",  # Shell for the integrated terminal emulator
+    "terminal-history": 1000,  # Scrollback lines of the integrated terminal emulator
+    "terminal-font-name": None,  # Font for the integrated terminal emulator (None = editor font)
+    "terminal-font-size": None,  # Font size for the integrated terminal emulator (None = editor font size)
     "tree_display_icon_size": 16,  # Default tree display icon size
     "current_font_name": "Selawik",
     "current_font_size": 10,
@@ -327,6 +331,7 @@ default_settings = {
     "current_editor_font_size": 10,
     "toplevel_menu_scale": 100.0,
     "standard_button_size": 50,
+    "default_drop_ratio": 50,  # Split share (percent) granted to a pane dropped via the dock overlay
     "restore_last_session": True,
     "theme": "Air",
     "custom_menu_scale": None,  # Custom MenuBar scale factor
@@ -343,6 +348,7 @@ default_settings = {
     "recent_files": [],
     "open-new-files-in-open-instance": False,
     "max-number-of-recent-files": 100,
+    "file-watch-mtime-poll-ms": 5000,
     "last-layout-filename": "last_layout.json",
     "editor": editor["default"].copy(),
     "keyboard-shortcuts": keyboard_shortcuts["default"].copy(),

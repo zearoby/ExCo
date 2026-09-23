@@ -6,27 +6,27 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+import enum
 import os
 import threading
-from enum import Enum, auto
-from threading import Lock, Timer
-from types import TracebackType
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, List, Optional, Set
 
+import functions
 import qt
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 
-class FileEvent(Enum):
+class FileEvent(enum.Enum):
     """
     Enumeration of all possible file system events.
     """
 
-    MODIFIED = auto()
-    CREATED = auto()
-    DELETED = auto()
-    MOVED = auto()
+    MODIFIED = enum.auto()
+    CREATED = enum.auto()
+    DELETED = enum.auto()
+    MOVED = enum.auto()
+    RENAME = enum.auto()
 
 
 class PathWatcher(qt.QObject):
@@ -38,25 +38,43 @@ class PathWatcher(qt.QObject):
     # Define a custom signal that matches the callback's signature
     file_changed = qt.pyqtSignal(object, str, object, object)
 
-    ECHO_ENABLED: bool = True  # Class variable to control echo output
+    ECHO_ENABLED: bool = False  # Class variable to control echo output
 
     def __init__(self, parent: Optional[qt.QObject] = None) -> None:
         """
         Initialize the PathWatcher.
         """
         super().__init__(parent)
-        self.monitored_files: List[str] = []  # List of files being monitored
-        self.observers: Dict[str, Observer] = (
-            {}
-        )  # Dictionary mapping directory paths to observers
+        self.monitored_files: Set[str] = set()  # Set of files being monitored
+        self._files_by_directory: dict[
+            str, set[str]
+        ] = {}  # Directory -> files mapping for O(1) lookups
+        self.observers: dict[
+            str, Any
+        ] = {}  # Dictionary mapping directory paths to observers
         self._lock: threading.Lock = (
             threading.Lock()
         )  # Thread safety for file list operations
+        self._is_stopping: threading.Event = (
+            threading.Event()
+        )  # Signals that monitoring is stopping
 
-    def echo(self, message: str) -> None:
+    def echo(self, *messages: str) -> None:
         """Print a message only if ECHO_ENABLED is True."""
         if self.ECHO_ENABLED:
-            print(message)
+            print(f"[{self.__class__.__name__}]", *messages)
+
+    def _is_stopping_active(self) -> bool:
+        """Check if stopping is in progress."""
+        return self._is_stopping.is_set()
+
+    def _set_stopping(self) -> None:
+        """Signal that monitoring is stopping."""
+        self._is_stopping.set()
+
+    def _reset_stopping(self) -> None:
+        """Reset the stopping flag."""
+        self._is_stopping.clear()
 
     def add_file(self, file_path: str) -> bool:
         """
@@ -68,24 +86,42 @@ class PathWatcher(qt.QObject):
         Returns:
             True if file was added successfully, False otherwise
         """
-        file_path = os.path.abspath(file_path)
+        file_path = functions.normalize_path(file_path)
+        directory = os.path.dirname(file_path)
+
+        if os.path.isabs(file_path) and file_path.startswith("/"):
+            self.echo(
+                f"Skipping WSL/unix path (not accessible via Windows APIs): {file_path}"
+            )
+            return False
+
+        if not os.path.isdir(directory):
+            self.echo(f"Directory {directory} does not exist")
+            return False
 
         with self._lock:
             if file_path in self.monitored_files:
                 self.echo(f"File {file_path} is already being monitored")
                 return False
 
-            if not os.path.exists(file_path):
-                self.echo(f"Warning: File {file_path} does not exist")
+            self.monitored_files.add(file_path)
 
-            self.monitored_files.append(file_path)
-
-            # Get the directory containing this file
-            directory: str = os.path.dirname(file_path)
+            # Track file by directory for O(1) lookups
+            if directory not in self._files_by_directory:
+                self._files_by_directory[directory] = set()
+            self._files_by_directory[directory].add(file_path)
 
             # If we're not already watching this directory, start watching it
             if directory not in self.observers:
-                self._start_watching_directory(directory)
+                try:
+                    self._start_watching_directory(directory)
+                except BaseException as ex:
+                    self.echo(f"Failed to start watching {directory}: {ex}")
+                    self.monitored_files.discard(file_path)
+                    self._files_by_directory[directory].discard(file_path)
+                    if not self._files_by_directory[directory]:
+                        del self._files_by_directory[directory]
+                    return False
 
             self.echo(f"Added {file_path} to monitoring list")
             return True
@@ -100,26 +136,35 @@ class PathWatcher(qt.QObject):
         Returns:
             True if file was removed successfully, False otherwise
         """
-        file_path = os.path.abspath(file_path)
+        file_path = functions.normalize_path(file_path)
 
+        dir_to_stop = None
         with self._lock:
             if file_path not in self.monitored_files:
                 self.echo(f"File {file_path} is not being monitored")
                 return False
 
+            directory = os.path.dirname(file_path)
             self.monitored_files.remove(file_path)
 
-            # Check if we still need to watch the directory
-            directory: str = os.path.dirname(file_path)
-            still_needed: bool = any(
-                os.path.dirname(f) == directory for f in self.monitored_files
+            # Use directory mapping for O(1) lookup
+            if directory in self._files_by_directory:
+                self._files_by_directory[directory].discard(file_path)
+                if not self._files_by_directory[directory]:
+                    del self._files_by_directory[directory]
+
+            still_needed = directory in self._files_by_directory and bool(
+                self._files_by_directory[directory]
             )
 
             if not still_needed and directory in self.observers:
-                self._stop_watching_directory(directory)
+                dir_to_stop = directory
 
-            self.echo(f"Removed {file_path} from monitoring list")
-            return True
+        if dir_to_stop:
+            self._stop_watching_directory(dir_to_stop)
+
+        self.echo(f"Removed {file_path} from monitoring list")
+        return True
 
     def get_monitored_files(self) -> List[str]:
         """
@@ -129,68 +174,57 @@ class PathWatcher(qt.QObject):
             Copy of the monitored files list
         """
         with self._lock:
-            return self.monitored_files.copy()
+            return list(self.monitored_files)
 
     def clear_all_files(self) -> None:
         """Remove all files from monitoring and stop all observers."""
+        self._set_stopping()  # Signal to callbacks first
+        dirs_to_stop = []
         with self._lock:
-            self.monitored_files.clear()
             for directory in list(self.observers.keys()):
-                self._stop_watching_directory(directory)
-            self.echo("Cleared all monitored files")
+                dirs_to_stop.append(directory)
+            self.monitored_files.clear()
+            self._files_by_directory.clear()
 
-    def add_files_batch(self, file_paths: List[str]) -> int:
-        """
-        Add multiple files efficiently in one operation.
-
-        Args:
-            file_paths: List of file paths to monitor
-
-        Returns:
-            Number of files successfully added
-        """
-        directories_to_watch: Set[str] = set()
-        added_count: int = 0
-
-        with self._lock:
-            for file_path in file_paths:
-                file_path = os.path.abspath(file_path)
-                if file_path not in self.monitored_files:
-                    if not os.path.exists(file_path):
-                        self.echo(f"Warning: File {file_path} does not exist")
-
-                    self.monitored_files.append(file_path)
-                    directories_to_watch.add(os.path.dirname(file_path))
-                    added_count += 1
-                else:
-                    self.echo(f"File {file_path} is already being monitored")
-
-        # Start watching all new directories at once
-        for directory in directories_to_watch:
-            if directory not in self.observers:
-                self._start_watching_directory(directory)
-
-        print(f"Added {added_count} files to monitoring list")
-        return added_count
+        for directory in dirs_to_stop:
+            self._stop_watching_directory(directory)
+        self.echo("Cleared all monitored files")
 
     def _start_watching_directory(self, directory: str) -> None:
         """Start watching a directory with a new observer."""
+        self._reset_stopping()
+        directory = functions.normalize_path(directory)
         handler: FileChangeHandler = FileChangeHandler(self)
-        observer: Observer = Observer()
-        observer.schedule(handler, directory, recursive=False)
-        observer.start()
+        observer = Observer()
 
+        # Track that we are about to start it
         self.observers[directory] = observer
-        self.echo(f"Started watching directory: {directory}")
+
+        try:
+            observer.schedule(handler, directory, recursive=False)
+            observer.start()
+            self.echo(f"Started watching directory: {directory}")
+        except Exception as e:
+            self.echo(f"Failed to start watching {directory}: {e}")
+            # Clean up if failed
+            try:
+                observer.stop()
+                observer.join()
+            except Exception:
+                pass
+            del self.observers[directory]
+            raise
 
     def _stop_watching_directory(self, directory: str) -> None:
         """Stop watching a directory and clean up the observer."""
-        if directory in self.observers:
-            observer: Observer = self.observers[directory]
-            observer.stop()
-            observer.join()
-            del self.observers[directory]
-            self.echo(f"Stopped watching directory: {directory}")
+        observer = self.observers.pop(directory, None)
+        if observer:
+            try:
+                observer.stop()
+                observer.join()
+                self.echo(f"Stopped watching directory: {directory}")
+            except Exception as e:
+                self.echo(f"Error while stopping observer for {directory}: {e}")
 
     def _handle_file_event(
         self,
@@ -217,26 +251,17 @@ class PathWatcher(qt.QObject):
             event_type, source_path, destination_path, modification_time
         )
 
-    def start_monitoring(self) -> None:
-        """Start the monitoring process. This is non-blocking."""
-        self.echo(f"Started monitoring {len(self.monitored_files)} files")
-
     def stop_monitoring(self) -> None:
         """Stop all monitoring and clean up resources."""
+        self._set_stopping()  # Signal to callbacks first
+        dirs_to_stop = []
         with self._lock:
             for directory in list(self.observers.keys()):
-                self._stop_watching_directory(directory)
-            self.echo("Stopped all monitoring")
+                dirs_to_stop.append(directory)
 
-    def get_observer_count(self) -> int:
-        """
-        Get the number of active directory observers.
-
-        Returns:
-            Number of active observers
-        """
-        with self._lock:
-            return len(self.observers)
+        for directory in dirs_to_stop:
+            self._stop_watching_directory(directory)
+        self.echo("Stopped all monitoring")
 
     def update_file_path(self, old_path: str, new_path: str) -> bool:
         """
@@ -249,8 +274,19 @@ class PathWatcher(qt.QObject):
         Returns:
             True if update was successful, False otherwise
         """
-        old_path = os.path.abspath(old_path)
-        new_path = os.path.abspath(new_path)
+        old_path = functions.normalize_path(old_path)
+        new_path = functions.normalize_path(new_path)
+        new_directory = os.path.dirname(new_path)
+
+        if os.path.isabs(new_path) and new_path.startswith("/"):
+            self.echo(
+                f"Skipping WSL/unix path (not accessible via Windows APIs): {new_path}"
+            )
+            return False
+
+        if not os.path.isdir(new_directory):
+            self.echo(f"Directory {new_directory} does not exist")
+            return False
 
         with self._lock:
             if old_path not in self.monitored_files:
@@ -261,48 +297,54 @@ class PathWatcher(qt.QObject):
                 self.echo(f"File {new_path} is already being monitored")
                 return False
 
-            # Remove old path and add new path
-            self.monitored_files.remove(old_path)
-            self.monitored_files.append(new_path)
-
-            # Handle directory observer management
             old_directory = os.path.dirname(old_path)
-            new_directory = os.path.dirname(new_path)
+            self.monitored_files.remove(old_path)
+            self.monitored_files.add(new_path)
 
-            # Check if we still need to watch the old directory
-            still_needed_old = any(
-                os.path.dirname(f) == old_directory for f in self.monitored_files
+            # Update directory mapping
+            old_directory = os.path.dirname(old_path)
+
+            if old_directory in self._files_by_directory:
+                self._files_by_directory[old_directory].discard(old_path)
+                if not self._files_by_directory[old_directory]:
+                    del self._files_by_directory[old_directory]
+
+            if new_directory not in self._files_by_directory:
+                self._files_by_directory[new_directory] = set()
+            self._files_by_directory[new_directory].add(new_path)
+
+            # Stop watching old directory if no longer needed
+            still_needed_old = old_directory in self._files_by_directory and bool(
+                self._files_by_directory[old_directory]
             )
+            dir_to_stop = None
             if not still_needed_old and old_directory in self.observers:
-                self._stop_watching_directory(old_directory)
+                dir_to_stop = old_directory
 
-            # Start watching the new directory if not already watching
+            # Start watching new directory if needed
+            dir_to_start = None
             if new_directory not in self.observers:
-                self._start_watching_directory(new_directory)
+                dir_to_start = new_directory
 
-            self.echo(f"Updated file path: {old_path} -> {new_path}")
-            return True
-        """
-        Get a list of directories currently being watched.
-        
-        Returns:
-            List of directory paths being monitored
-        """
-        with self._lock:
-            return list(self.observers.keys())
+        # Perform observer changes outside the lock to avoid deadlocks
+        if dir_to_stop:
+            self._stop_watching_directory(dir_to_stop)
 
-    def __enter__(self) -> "PathWatcher":
-        """Context manager entry."""
-        return self
+        if dir_to_start:
+            try:
+                self._start_watching_directory(dir_to_start)
+            except BaseException as ex:
+                self.echo(f"Failed to start watching {dir_to_start}: {ex}")
+                # Rollback file tracking changes
+                with self._lock:
+                    self.monitored_files.discard(new_path)
+                    self._files_by_directory[new_directory].discard(new_path)
+                    if not self._files_by_directory.get(new_directory):
+                        del self._files_by_directory[new_directory]
+                return False
 
-    def __exit__(
-        self,
-        exc_type: Optional[type],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ) -> None:
-        """Context manager exit - clean up resources."""
-        self.stop_monitoring()
+        self.echo(f"Updated file path: {old_path} -> {new_path}")
+        return True
 
 
 class FileChangeHandler(FileSystemEventHandler):
@@ -311,136 +353,162 @@ class FileChangeHandler(FileSystemEventHandler):
     def __init__(self, path_watcher: PathWatcher) -> None:
         self.path_watcher: PathWatcher = path_watcher
         super().__init__()
-        # A dictionary to store a threading.Timer and last event type for each file.
-        self._debounce_timers: Dict[str, Dict[str, Any]] = {}
-        # A debounce interval in seconds.
-        self._debounce_interval: float = 0.5
-        # A lock to ensure thread-safe access to the _debounce_timers dictionary.
-        self._timer_lock: Lock = Lock()
 
-    def _start_debounce_timer(self, file_path: str, event_type: "FileEvent") -> None:
-        """
-        Starts or resets a threading.Timer for a specific file and event type.
-        """
-        file_path_abs: str = os.path.abspath(file_path)
+    def echo(self, *messages: str) -> None:
+        """Print a message only if ECHO_ENABLED is True."""
+        if PathWatcher.ECHO_ENABLED:
+            print(f"[{self.__class__.__name__}]", *messages)
 
-        is_monitored: bool = False
+    def __handle_change(
+        self,
+        event_type: FileEvent,
+        source_path: str,
+        destination_path: Optional[str] = None,
+    ) -> None:
+        """
+        Handle a file system event for a monitored file.
+        Called from the watchdog observer thread.
+        """
+        if self.path_watcher._is_stopping_active():
+            return
+
+        source_path = functions.normalize_path(source_path)
+
+        normalized_destination: Optional[str] = None
+        if destination_path is not None:
+            normalized_destination = functions.normalize_path(destination_path)
+
         with self.path_watcher._lock:
-            if file_path_abs in self.path_watcher.monitored_files:
-                is_monitored = True
+            # Early return if not monitored to avoid expensive syscalls
+            source_monitored = source_path in self.path_watcher.monitored_files
+            destination_monitored = (
+                normalized_destination is not None
+                and normalized_destination in self.path_watcher.monitored_files
+            )
+            if not source_monitored and not destination_monitored:
+                self.echo(f"Ignored unmonitored file: {source_path}")
+                return
 
-        if not is_monitored:
+        if event_type == FileEvent.MOVED:
+            if (
+                destination_monitored
+                and not source_monitored
+                and normalized_destination is not None
+            ):
+                # A watched file replaced by an atomic-write tool (write to a
+                # temp file, then os.replace/rename over the original) is
+                # reported as MOVED with an unmonitored source and a monitored
+                # destination. The destination still holds our file, so surface
+                # it as a modification of that watched path.
+                replace_mtime: Optional[float] = None
+                try:
+                    replace_mtime = os.path.getmtime(normalized_destination)
+                except (FileNotFoundError, PermissionError):
+                    pass
+                self.path_watcher._handle_file_event(
+                    FileEvent.MODIFIED, normalized_destination, None, replace_mtime
+                )
+                self.echo(f"File replaced via rename: {normalized_destination}")
+                return
+            if source_monitored and normalized_destination is not None:
+                # The watched file itself was moved elsewhere. Relay the move so
+                # the editor tab can follow the file to its new location.
+                move_mtime: Optional[float] = None
+                try:
+                    move_mtime = os.path.getmtime(normalized_destination)
+                except (FileNotFoundError, PermissionError):
+                    pass
+                self.path_watcher._handle_file_event(
+                    FileEvent.MOVED, source_path, destination_path, move_mtime
+                )
+                self.echo(f"File moved: {source_path} -> {destination_path}")
+                return
             return
 
         if event_type == FileEvent.DELETED:
-            with self.path_watcher._lock:
-                self.path_watcher._handle_file_event(
-                    event_type, file_path_abs, None, None
-                )
-                if file_path_abs in self.path_watcher.monitored_files:
-                    self.path_watcher.monitored_files.remove(file_path_abs)
-
-            with self._timer_lock:
-                if file_path_abs in self._debounce_timers:
-                    self._debounce_timers[file_path_abs]["timer"].cancel()
-                    del self._debounce_timers[file_path_abs]
+            # DO NOT remove file from monitored_files here.
+            #
+            # Many external tools (formatters, editors, linters) use atomic-write:
+            #   1. write content to a temp file
+            #   2. rename/move temp over original
+            # This generates a DELETED event (step 2 removes the original inode)
+            # followed almost immediately by a CREATED event (new file at same path).
+            #
+            # Previously we discarded the path from monitored_files on DELETED,
+            # which caused the subsequent CREATED event to be ignored (the file
+            # wasn't in the monitored set anymore). Result: the editor never
+            # reloaded and the tab got marked with "*" incorrectly.
+            #
+            # By keeping the path in monitored_files, the CREATED event flows
+            # through normally and the editor reloads from the new file content.
+            # The file entry is properly cleaned up when the editor tab closes
+            # (via PathWatcher.remove_file called from editor_deleted signal).
+            #
+            # Downside: if a file is truly deleted and never re-created, the
+            # monitored_files entry is stale until the editor closes. This is
+            # an acceptable resource cost (one string per open file) that avoids
+            # the far worse UX of silent stale content after atomic writes.
+            self.path_watcher._handle_file_event(
+                FileEvent.DELETED, source_path, None, None
+            )
+            self.echo(f"File deleted: {source_path}")
             return
 
-        with self._timer_lock:
-            timer_data: Optional[Dict[str, Any]] = self._debounce_timers.get(
-                file_path_abs
-            )
-
-            if timer_data and timer_data["type"] == event_type:
-                timer_data["timer"].cancel()
-
-            timer: Timer = Timer(
-                self._debounce_interval,
-                self._handle_timer_timeout,
-                args=[file_path_abs, event_type],
-            )
-            self._debounce_timers[file_path_abs] = {
-                "timer": timer,
-                "type": event_type,
-            }
-            timer.start()
-
-    def _handle_timer_timeout(self, file_path: str, event_type: FileEvent) -> None:
-        """
-        This function is called when the debounce timer for a file expires.
-        It retrieves the mtime and passes it to the handler.
-        """
         mtime: Optional[float] = None
         try:
-            mtime = os.path.getmtime(file_path)
-        except FileNotFoundError:
-            self.path_watcher.echo(f"File not found for mtime check: {file_path}")
-            return
+            mtime = os.path.getmtime(source_path)
+        except (FileNotFoundError, PermissionError) as e:
+            self.echo(f"Could not access mtime for {source_path}: {e}")
+            if not os.path.exists(source_path):
+                self.path_watcher._handle_file_event(
+                    FileEvent.DELETED, source_path, None, None
+                )
+                return
 
-        self.path_watcher._handle_file_event(event_type, file_path, None, mtime)
-        self.path_watcher.echo(
-            f"Handled debounced event: {event_type.name} on {file_path} with mtime {mtime}"
+        self.path_watcher._handle_file_event(
+            event_type, source_path, destination_path, mtime
+        )
+        self.echo(
+            f"Handled change event: {event_type.name} on {source_path} with mtime {mtime}"
         )
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
-            self._start_debounce_timer(event.src_path, FileEvent.MODIFIED)
+            src_path = (
+                event.src_path.decode("utf-8")
+                if isinstance(event.src_path, bytes)
+                else event.src_path
+            )
+            self.__handle_change(FileEvent.MODIFIED, src_path, None)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
-            self._start_debounce_timer(event.src_path, FileEvent.CREATED)
+            src_path = (
+                event.src_path.decode("utf-8")
+                if isinstance(event.src_path, bytes)
+                else event.src_path
+            )
+            self.__handle_change(FileEvent.CREATED, src_path, None)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
-            self._start_debounce_timer(event.src_path, FileEvent.DELETED)
+            src_path = (
+                event.src_path.decode("utf-8")
+                if isinstance(event.src_path, bytes)
+                else event.src_path
+            )
+            self.__handle_change(FileEvent.DELETED, src_path, None)
 
     def on_moved(self, event: FileSystemEvent) -> None:
-        if not event.is_directory and hasattr(event, "dest_path"):
-            source_path: str = os.path.abspath(event.src_path)
-            destination_path: str = os.path.abspath(event.dest_path)
-
-            with self.path_watcher._lock:
-                if source_path in self.path_watcher.monitored_files:
-                    self.path_watcher.monitored_files.remove(source_path)
-                    self.path_watcher.monitored_files.append(destination_path)
-
-                    with self._timer_lock:
-                        if source_path in self._debounce_timers:
-                            timer_data: Dict[str, Any] = self._debounce_timers.pop(
-                                source_path
-                            )
-                            timer_data["timer"].cancel()
-                            self._debounce_timers[destination_path] = timer_data
-
-                    old_directory: str = os.path.dirname(source_path)
-                    new_directory: str = os.path.dirname(destination_path)
-                    still_needed_old: bool = any(
-                        os.path.dirname(f) == old_directory
-                        for f in self.path_watcher.monitored_files
-                    )
-                    if (
-                        not still_needed_old
-                        and old_directory in self.path_watcher.observers
-                    ):
-                        self.path_watcher._stop_watching_directory(old_directory)
-
-                    if new_directory not in self.path_watcher.observers:
-                        self.path_watcher._start_watching_directory(new_directory)
-
-                    mtime: Optional[float] = None
-                    try:
-                        mtime = os.path.getmtime(destination_path)
-                    except FileNotFoundError:
-                        self.path_watcher.echo(
-                            f"File not found for mtime check: {destination_path}"
-                        )
-
-                    self.path_watcher._handle_file_event(
-                        FileEvent.MOVED,
-                        source_path,
-                        destination_path,
-                        mtime,
-                    )
-                    self.path_watcher.echo(
-                        f"Updated monitoring: {source_path} -> {destination_path}"
-                    )
+        if not event.is_directory:
+            src_path = (
+                event.src_path.decode("utf-8")
+                if isinstance(event.src_path, bytes)
+                else event.src_path
+            )
+            dest_path = (
+                event.dest_path.decode("utf-8")
+                if isinstance(event.dest_path, bytes)
+                else event.dest_path
+            )
+            self.__handle_change(FileEvent.MOVED, src_path, dest_path)

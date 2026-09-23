@@ -205,7 +205,7 @@ class CustomInterpreter(code.InteractiveInterpreter):
         # The (?=...) regex operator means "stop matching if you get to ..., but ... has to be in the string"
         # The "((.*)(?=\)))" has to be the last expression if using "s:" in a function like "print()" because it captures anything until the closing parenthesis
     )
-    """
+    r"""
     Example of replacing a function name with a new function name:
         import re
         a = "old(test)"
@@ -307,7 +307,8 @@ class CustomInterpreter(code.InteractiveInterpreter):
             lines.extend(traceback.format_exception_only(type, value))
         finally:
             tblist = tb = None
-            return "".join(lines)
+
+        return "".join(lines)
 
     def replace_references(self, references, command):
         """Replace references with actual forms module methods and attributes"""
@@ -418,6 +419,10 @@ class CustomInterpreter(code.InteractiveInterpreter):
                     for command in commands:
                         result = self.eval_command(command)
                         if result != None:
+                            # This runs in a background thread, so log the
+                            # error instead of touching the GUI directly;
+                            # output_redirect() persists it to the log file.
+                            print(result)
                             return
 
                 # Start the new thread
@@ -481,6 +486,8 @@ class CustomInterpreter(code.InteractiveInterpreter):
         for cmd in process_commands:
             result = self.eval_command(cmd)
             if result != None:
+                # Log the error so command failures do not disappear silently
+                print(result)
                 return
 
     def create_terminal(self, dir=None):
@@ -499,7 +506,11 @@ class CustomInterpreter(code.InteractiveInterpreter):
             # Remove the PYTHONHOME environment variable that Nuitka creates. It causes problems
             # when running the systems python interpreter!
             os.environ["PYTHONHOME"] = ""
-            subprocess.Popen("cmd.exe")
+            # Spawn cmd in a fresh console, so a new window appears even when
+            # Ex.Co. itself is running from a console (otherwise the child
+            # would inherit the parent's console and nothing visible happens)
+            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            subprocess.Popen("cmd.exe", creationflags=creationflags)
         else:
             # GNU/Linux (Lubuntu tested)
             try:

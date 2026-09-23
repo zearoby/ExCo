@@ -1,4 +1,5 @@
 """
+
 Copyright (c) 2013-present Matic Kukovec.
 Released under the GNU GPL3 license.
 
@@ -6,17 +7,21 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import qt
 import data
 import lexers
 import settings
 
 
-missing_themes = {}
+missing_themes: dict[str, list[str]] = {}
 
 
 class AVS(qt.QsciLexerAVS):
-    styles = {
+    styles: dict[str, int] = {
         "BlockComment": 1,
         "ClipProperty": 13,
         "Default": 0,
@@ -34,11 +39,11 @@ class AVS(qt.QsciLexerAVS):
         "TripleString": 8,
     }
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Any = None) -> None:
         super().__init__()
         self.set_theme(settings.get_theme())
 
-    def set_theme(self, theme):
+    def set_theme(self, theme: dict[str, Any]) -> None:
         self.setDefaultColor(qt.QColor(settings.get_theme()["fonts"]["default"]["color"]))
         self.setDefaultPaper(qt.QColor(settings.get_theme()["fonts"]["default"]["background"]))
         self.setDefaultFont(settings.get_editor_font())
@@ -9884,337 +9889,18 @@ class Markdown(qt.QsciLexerMarkdown):
         self.setDefaultColor(qt.QColor(settings.get_theme()["fonts"]["default"]["color"]))
         self.setDefaultPaper(qt.QColor(settings.get_theme()["fonts"]["default"]["background"]))
         self.setDefaultFont(settings.get_editor_font())
-        missing_themes["Markdown"] = []
         for style in self.styles.keys():
+            # Some themes do not carry style entries for every Markdown style.
+            # Fall back per-style to the defaults instead of raising, so the
+            # lexer stays usable with any bundled theme.
+            style_options = theme["fonts"].get(style.lower())
+            if style_options is None:
+                continue
+            self.setPaper(qt.QColor(style_options["background"]), self.styles[style])
             try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
-        for style in self.styles.keys():
-            try:
-                self.setPaper(
-                    qt.QColor(settings.get_theme()["fonts"][style.lower()]["background"]),
-                    self.styles[style],
-                )
-                lexers.set_font(self, style, theme["fonts"][style.lower()])
-            except:
-                if not (style in missing_themes["Markdown"]):
-                    missing_themes["Markdown"].append(style)
-        if len(missing_themes["Markdown"]) != 0:
-            print("Lexer 'Markdown' missing themes:")
-            for mt in missing_themes["Markdown"]:
-                print("    - " + mt)
-            raise Exception("Lexer 'Markdown' has missing themes!")
+                lexers.set_font(self, style, style_options)
+            except Exception:
+                pass
 
 
 class Matlab(qt.QsciLexerMatlab):

@@ -6,6 +6,10 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import re
 
 import data
@@ -14,14 +18,15 @@ import qt
 
 import functions
 import lexers
+from lexers.baselexer import BaseLexer
 
 
-class SmallBasic(qt.QsciLexerCustom):
+class SmallBasic(BaseLexer):
     """
     Custom lexer for the SmallBasic programming languages
     """
 
-    styles = {
+    styles: dict[str, int] = {
         "Default": 0,
         "Comment": 1,
         "keyword1": 2,
@@ -37,7 +42,7 @@ class SmallBasic(qt.QsciLexerCustom):
         "Number": 12,
         "Operator": 13,
     }
-    keyword_remap = {
+    keyword_remap: dict[str, str] = {
         "ConsoleFunctions": "keyword1",
         "DataFunctions": "keyword2",
         "DateFunctions": "keyword3",
@@ -414,7 +419,7 @@ class SmallBasic(qt.QsciLexerCustom):
     # Comment tokens
     tokens_comment = ["'"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Any = None) -> None:
         """
         Overridden initialization
         """
@@ -429,26 +434,23 @@ class SmallBasic(qt.QsciLexerCustom):
         # Set the theme
         self.set_theme(settings.get_theme())
 
-    def language(self):
+    def language(self) -> str:
         return "SmallBasic"
 
-    def description(self, style):
+    def description(self, style: int) -> str:
         if style < len(self.styles):
             description = "Custom lexer for the SmallBasic circuit languages"
         else:
             description = ""
         return description
 
-    def defaultStyle(self):
+    def defaultStyle(self) -> int:
         return self.styles["Default"]
 
-    def braceStyle(self):
+    def braceStyle(self) -> int:
         return self.styles["Default"]
 
-    def defaultFont(self, style):
-        return qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
-
-    def set_theme(self, theme):
+    def set_theme(self, theme: dict[str, Any]) -> None:
         for style in self.styles:
             # Papers
             self.setPaper(
@@ -458,7 +460,7 @@ class SmallBasic(qt.QsciLexerCustom):
             # Fonts
             lexers.set_font(self, style, theme["fonts"][style.lower()])
 
-    def styleText(self, start, end):
+    def styleText(self, start: int, end: int) -> None:
         """
         Overloaded method for styling text.
         """
@@ -478,10 +480,7 @@ class SmallBasic(qt.QsciLexerCustom):
         # Initialize various states and split the text into tokens
         stringing = False
         commenting = False
-        tokens = [
-            (token, len(bytearray(token, "utf-8")))
-            for token in self.splitter.findall(text)
-        ]
+        tokens = [(token, len(bytearray(token, "utf-8"))) for token in self.splitter.findall(text)]
         # Style the tokens accordingly
         for i, token in enumerate(tokens):
             if commenting == True:
@@ -506,9 +505,7 @@ class SmallBasic(qt.QsciLexerCustom):
             elif token[0] in operator_list:
                 setStyling(token[1], self.styles["Operator"])
             elif token[0] in keyword_dictionary["ConsoleFunctions"]:
-                setStyling(
-                    token[1], self.styles[self.keyword_remap["ConsoleFunctions"]]
-                )
+                setStyling(token[1], self.styles[self.keyword_remap["ConsoleFunctions"]])
             elif token[0] in keyword_dictionary["DataFunctions"]:
                 setStyling(token[1], self.styles[self.keyword_remap["DataFunctions"]])
             elif token[0] in keyword_dictionary["DateFunctions"]:
@@ -516,13 +513,9 @@ class SmallBasic(qt.QsciLexerCustom):
             elif token[0] in keyword_dictionary["FileFunctions"]:
                 setStyling(token[1], self.styles[self.keyword_remap["FileFunctions"]])
             elif token[0] in keyword_dictionary["GraphicsFunctions"]:
-                setStyling(
-                    token[1], self.styles[self.keyword_remap["GraphicsFunctions"]]
-                )
+                setStyling(token[1], self.styles[self.keyword_remap["GraphicsFunctions"]])
             elif token[0] in keyword_dictionary["LanguageFunctions"]:
-                setStyling(
-                    token[1], self.styles[self.keyword_remap["LanguageFunctions"]]
-                )
+                setStyling(token[1], self.styles[self.keyword_remap["LanguageFunctions"]])
             elif token[0] in keyword_dictionary["MathFunctions"]:
                 setStyling(token[1], self.styles[self.keyword_remap["MathFunctions"]])
             elif token[0] in keyword_dictionary["StringFunctions"]:

@@ -6,6 +6,7 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+import difflib
 import os
 import re
 
@@ -20,6 +21,7 @@ import functions
 import lexers
 import qt
 import settings
+from typing import Any
 
 import gui.contextmenu
 from gui.baseeditor import BaseEditor
@@ -37,7 +39,7 @@ class CustomEditor(BaseEditor):
     """
 
     # Class variables
-    _parent = None
+    _parent: Any = None
     main_form = None
     name = ""
     save_path = ""
@@ -198,7 +200,7 @@ class CustomEditor(BaseEditor):
         # sensitive to mouseclicks
         self.setMarginSensitivity(1, True)
         # Add needed signals
-        self.cursorPositionChanged.connect(self._parent._signal_editor_cursor_change)
+        self.cursorPositionChanged.connect(self._cursor_position_changed)
         self.marginClicked.connect(self.__margin_clicked)
         self.linesChanged.connect(self.__lines_changed)
         self.selectionChanged.connect(self.__selection_changed)
@@ -404,6 +406,15 @@ class CustomEditor(BaseEditor):
                     selected_text, case_sensitive=False, regular_expression=True
                 )
             CustomEditor.selection_lock = False
+
+    def _cursor_position_changed(self, cursor_line: int, cursor_column: int) -> None:
+        """Slot for the 'cursorPositionChanged' signal.
+
+        The containing window is resolved through 'self._parent' at emit
+        time, so the connection remains correct after the tab is moved
+        between windows.
+        """
+        self._parent._signal_editor_cursor_change(cursor_line, cursor_column)
 
     def _skip_next_repl_focus(self):
         """
@@ -652,32 +663,30 @@ class CustomEditor(BaseEditor):
         """Set the text of a line"""
         self.replace_line(line_text, line_number)
 
-    def set_lines(self, line_from, line_to, list_of_strings):
-        """
-        Set the text of multiple lines in one operation.
-        This function is almost the same as "prepend_to_lines" and "append_to_lines",
-        they may be merged in the future.
-        """
-        # Check the boundaries
+    def _transform_lines(self, line_from, line_to, transform_func):
+        """Apply transform_func to each line in [line_from-1, line_to-1] and replace."""
+        line_from -= 1
+        line_to -= 1
         if line_from < 0:
             line_from = 0
         if line_to < 0:
             line_to = 0
-        # Select the text from the lines and test if line_to is the last line in the document
         if line_to == self.lines() - 1:
             self.setSelection(line_from, 0, line_to, len(self.text(line_to)))
         else:
             self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
-        # Split get the selected lines and add them to a list
-        selected_lines = []
-        for i in range(line_from, line_to + 1):
-            selected_lines.append(self.text(i))
-        # Loop through the list and replace the line text
-        for i in range(len(selected_lines)):
-            selected_lines[i] = list_of_strings[i]
-        # Replace the selected text with the prepended list merged into one string
-        self.replaceSelectedText(self.list_to_text(selected_lines))
-        # Set the cursor to the beginning of the last set line
+        lines = self.text_to_list(self.selectedText())
+        for i in range(len(lines)):
+            lines[i] = transform_func(lines[i])
+        self.replaceSelectedText(self.list_to_text(lines))
+        self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
+
+    def set_lines(self, line_from, line_to, list_of_strings):
+        """
+        Set the text of multiple lines in one operation.
+        """
+        strings_iter = iter(list_of_strings)
+        self._transform_lines(line_from + 1, line_to + 1, lambda _: next(strings_iter))
         self.setCursorPosition(line_to, 0)
 
     def set_all_text(self, text):
@@ -767,27 +776,9 @@ class CustomEditor(BaseEditor):
             return
         # Check if the appending text is valid
         if appending_text != "" and appending_text != None:
-            # Adjust the line numbers to standard(0..lines()) numbering
-            line_from -= 1
-            line_to -= 1
-            # Check the boundaries
-            if line_from < 0:
-                line_from = 0
-            if line_to < 0:
-                line_to = 0
-            # Select the text from the lines
-            self.setSelection(
-                line_from, 0, line_to, len(self.text(line_to).replace("\n", ""))
+            self._transform_lines(
+                line_from, line_to, lambda line: line + appending_text
             )
-            # Split the line text into a list
-            selected_lines = self.text_to_list(self.selectedText())
-            # Loop through the list and prepend the prepend text
-            for i in range(len(selected_lines)):
-                selected_lines[i] = selected_lines[i] + appending_text
-            # Replace the selected text with the prepended list merged into one string
-            self.replaceSelectedText(self.list_to_text(selected_lines))
-            # Select the appended lines, to enable consecutive prepending
-            self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
 
     def prepend_to_line(self, append_text, line_number):
         """Add text to the front of the line"""
@@ -834,123 +825,65 @@ class CustomEditor(BaseEditor):
             return
         # Check if the appending text is valid
         if prepending_text != "" and prepending_text != None:
-            # Adjust the line numbers to standard(0..lines()) numbering
-            line_from -= 1
-            line_to -= 1
-            # Check the boundaries
-            if line_from < 0:
-                line_from = 0
-            if line_to < 0:
-                line_to = 0
-            # Select the text from the lines
-            self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
-            # Split the line text into a list
-            selected_lines = self.text_to_list(self.selectedText())
-            # Loop through the list and prepend the prepend text
-            for i in range(len(selected_lines)):
-                selected_lines[i] = prepending_text + selected_lines[i]
-            # Replace the selected text with the prepended list merged into one string
-            self.replaceSelectedText(self.list_to_text(selected_lines))
-            # Select the prepended lines, to enable consecutive prepending
-            self.setSelection(
-                line_from,
-                0,
-                line_to,
-                len(self.text(line_to))
-                - 1,  # -1 to offset the newline character ('\n')
+            self._transform_lines(
+                line_from, line_to, lambda line: prepending_text + line
             )
+
+    def _comment_lines_internal(self, line_from, line_to):
+        """Comment lines [line_from, line_to) according to the currently set lexer."""
+        if self.lexer().open_close_comment_style == True:
+            self.prepend_to_lines(self.lexer().comment_string, line_from, line_to)
+            self.append_to_lines(self.lexer().end_comment_string, line_from, line_to)
+        else:
+            self.prepend_to_lines(self.lexer().comment_string, line_from, line_to)
 
     def comment_line(self, line_number=None):
         """Comment a single line according to the currently set lexer"""
         if line_number == None:
             line_number = self.getCursorPosition()[0] + 1
-        # Check commenting style
-        if self.lexer().open_close_comment_style == True:
-            self.prepend_to_line(self.lexer().comment_string, line_number)
-            self.append_to_line(self.lexer().end_comment_string, line_number)
-        else:
-            self.prepend_to_line(self.lexer().comment_string, line_number)
-        # Return the cursor to the commented line
+        self._comment_lines_internal(line_number, line_number)
         self.setCursorPosition(line_number - 1, 0)
 
     def comment_lines(self, line_from=0, line_to=0):
         """Comment lines according to the currently set lexer"""
         if line_from == line_to:
             return
+        self._comment_lines_internal(line_from, line_to)
+        line_to_length = len(self.line_list[line_to])
+        self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
+
+    def _uncomment_line_text(self, line_text):
+        """Return uncommented version of a line's text, or unchanged if not commented."""
+        if not line_text.lstrip().startswith(self.lexer().comment_string):
+            return line_text
+        if self.lexer().open_close_comment_style == True:
+            result = line_text.replace(self.lexer().comment_string, "", 1)
+            result = functions.right_replace(
+                result, self.lexer().end_comment_string, "", 1
+            )
+            return result
         else:
-            # Check commenting style
-            if self.lexer().open_close_comment_style == True:
-                self.prepend_to_lines(self.lexer().comment_string, line_from, line_to)
-                self.append_to_lines(
-                    self.lexer().end_comment_string, line_from, line_to
-                )
-            else:
-                self.prepend_to_lines(self.lexer().comment_string, line_from, line_to)
-            # Select the commented lines again, reverse the boundaries,
-            # so that the cursor will be at the beggining of the selection
-            line_to_length = len(self.line_list[line_to])
-            self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
+            return line_text.replace(self.lexer().comment_string, "", 1)
 
     def uncomment_line(self, line_number=None):
         """Uncomment a single line according to the currently set lexer"""
         if line_number == None:
             line_number = self.getCursorPosition()[0] + 1
-        line_text = self.get_line(line_number)
-        # Check the commenting style
-        if self.lexer().open_close_comment_style == True:
-            if line_text.lstrip().startswith(self.lexer().comment_string):
-                new_line = line_text.replace(self.lexer().comment_string, "", 1)
-                new_line = functions.right_replace(
-                    new_line, self.lexer().end_comment_string, "", 1
-                )
-                self.replace_line(new_line, line_number)
-                # Return the cursor to the uncommented line
-                self.setCursorPosition(line_number - 1, 0)
-        else:
-            if line_text.lstrip().startswith(self.lexer().comment_string):
-                self.replace_line(
-                    line_text.replace(self.lexer().comment_string, "", 1), line_number
-                )
-                # Return the cursor to the uncommented line
-                self.setCursorPosition(line_number - 1, 0)
+        new_text = self._uncomment_line_text(self.get_line(line_number))
+        if new_text != self.get_line(line_number):
+            self.replace_line(new_text, line_number)
+            self.setCursorPosition(line_number - 1, 0)
 
     def uncomment_lines(self, line_from, line_to):
         """Uncomment lines according to the currently set lexer"""
         if line_from == line_to:
             return
-        else:
-            # Select the lines
-            selected_lines = self.line_list[line_from:line_to]
-            # Loop through the list and remove the comment string if it's in front of the line
-            for i in range(len(selected_lines)):
-                # Check the commenting style
-                if self.lexer().open_close_comment_style == True:
-                    if (
-                        selected_lines[i]
-                        .lstrip()
-                        .startswith(self.lexer().comment_string)
-                    ):
-                        selected_lines[i] = selected_lines[i].replace(
-                            self.lexer().comment_string, "", 1
-                        )
-                        selected_lines[i] = functions.right_replace(
-                            selected_lines[i], self.lexer().end_comment_string, "", 1
-                        )
-                else:
-                    if (
-                        selected_lines[i]
-                        .lstrip()
-                        .startswith(self.lexer().comment_string)
-                    ):
-                        selected_lines[i] = selected_lines[i].replace(
-                            self.lexer().comment_string, "", 1
-                        )
-            # Replace the selected text with the prepended list merged into one string
-            self.line_list[line_from:line_to] = selected_lines
-            # Select the uncommented lines again, reverse the boundaries,
-            # so that the cursor will be at the beggining of the selection
-            line_to_length = len(self.line_list[line_to])
-            self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
+        selected_lines = self.line_list[line_from:line_to]
+        for i in range(len(selected_lines)):
+            selected_lines[i] = self._uncomment_line_text(selected_lines[i])
+        self.line_list[line_from:line_to] = selected_lines
+        line_to_length = len(self.line_list[line_to])
+        self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
 
     def indent_lines_to_cursor(self):
         """
@@ -1914,9 +1847,12 @@ class CustomEditor(BaseEditor):
         """
         Save a document to a file
         """
+        add_monitoring: bool = False
         if self.save_path == "" or saveas != False:
             # Tab has an empty directory attribute or "SaveAs" was invoked, select file using the QFileDialog
             # Get the filename from the QFileDialog window
+            add_monitoring = True
+
             tab_text = self._parent.tabText(self._parent.indexOf(self))
             temp_save_path = qt.QFileDialog.getSaveFileName(
                 self,
@@ -1963,12 +1899,18 @@ class CustomEditor(BaseEditor):
         if save_result == True:
             # Saving has succeded
             self.reset_text_changed()
+            self.modification_time = os.path.getmtime(self.save_path)
             # Update the lexer for the document only if the lexer is not set
             if isinstance(self.lexer(), lexers.Text):
                 file_type = functions.get_file_type(self.save_path)
                 self.choose_lexer(file_type)
             # Update the settings manipulator with the new file
             self.main_form.settings.update_recent_list(self.save_path)
+            # Signal file saved to add to PathWatcher if not already monitored
+            if hasattr(self.main_form, "tools"):
+                path_watcher = self.main_form.tools.path_watcher
+                if self.save_path not in path_watcher.monitored_files:
+                    data.signal_dispatcher.editor_file_saved_as.emit(self.save_path)
             return True
         else:
             # Saving has failed
@@ -2132,6 +2074,44 @@ class CustomEditor(BaseEditor):
         # Store the modification time
         self.modification_time = os.path.getmtime(self.save_path)
 
+    @staticmethod
+    def _normalize_line_endings(text: str) -> str:
+        """Normalize CRLF/CR line endings to LF for content comparison."""
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _apply_reload_diff(self, new_text: str) -> None:
+        """Apply only the changed hunks of new_text to the document.
+
+        Compared to a whole-text replace this keeps the undo history and the
+        caret of the unchanged content intact. Line endings are normalized for
+        the comparison, then the whole document is converted to the current EOL
+        mode afterwards, so no mixed line endings remain.
+        """
+        old_norm = self._normalize_line_endings(self.text()).splitlines(True)
+        new_norm = self._normalize_line_endings(new_text).splitlines(True)
+        matcher = difflib.SequenceMatcher(None, old_norm, new_norm)
+        # Group all reload edits into a single undo step so that Ctrl+Z undoes
+        # the whole external change at once, not hunk by hunk.
+        self.SendScintilla(self.SCI_BEGINUNDOACTION)
+        try:
+            # Apply bottom-up so earlier line indices stay valid.
+            for opcode in reversed(matcher.get_opcodes()):
+                tag, i1, i2, j1, j2 = opcode
+                if tag == "equal":
+                    continue
+                self.setSelection(i1, 0, i2, 0)
+                self.removeSelectedText()
+                new_block = "".join(new_norm[j1:j2])
+                if new_block:
+                    self.setCursorPosition(i1, 0)
+                    self.insert(new_block)
+            # Convert the document to the current EOL mode so the reloaded
+            # hunks do not leave mixed line endings behind. This is inside the
+            # undo group so the whole reload is one undoable step.
+            self.convertEols(self.eolMode())
+        finally:
+            self.SendScintilla(self.SCI_ENDUNDOACTION)
+
     def reload_file(self):
         """
         Reload current document from disk
@@ -2141,6 +2121,28 @@ class CustomEditor(BaseEditor):
             self.main_form.display.write_to_statusbar(
                 "Document has no file on disk!", 3000
             )
+            return
+        # Open the file and read the contents
+        try:
+            disk_file_text = functions.read_file_to_string(self.save_path)
+        except:
+            self.main_form.display.write_to_statusbar("Error reloading file!", 3000)
+            return
+        if disk_file_text is None:
+            self.main_form.display.write_to_statusbar("Error reading file!", 3000)
+            return
+        # If the disk content is identical to the editor content there is
+        # nothing to reload (this also covers reloads triggered by our own
+        # save, and avoids destroying the undo history for no reason).
+        # Compare with normalized line endings so that identical content that
+        # only differs in CRLF/LF does not trigger a (harmful) full reload.
+        if self._normalize_line_endings(disk_file_text) == self._normalize_line_endings(
+            self.text()
+        ):
+            try:
+                self.modification_time = os.path.getmtime(self.save_path)
+            except OSError:
+                pass
             return
         # Check the file status
         if self.save_status == constants.FileStatus.MODIFIED:
@@ -2152,27 +2154,28 @@ class CustomEditor(BaseEditor):
             )
             reply = YesNoDialog.question(reload_message)
             if reply == constants.DialogResult.No.value:
-                # Cancel tab file reloading
+                # Cancel tab file reloading. Acknowledge the disk version so the
+                # mtime-based poller does not re-prompt on every tick.
+                try:
+                    self.modification_time = os.path.getmtime(self.save_path)
+                except OSError:
+                    pass
                 return
         # Check if the name of the document is valid
         if self.name == "" or self.name is None:
             return
-        # Open the file and read the contents
-        try:
-            disk_file_text = functions.read_file_to_string(self.save_path)
-        except:
-            self.main_form.display.write_to_statusbar("Error reloading file!", 3000)
-            return
         # Save the current cursor position
         temp_position = self.getCursorPosition()
         first_visible_line = self.firstVisibleLine()
-        # Reload the file
-        self.replace_entire_text(disk_file_text)
+        # Reload the file by applying only the changed parts. This preserves
+        # the undo history and caret position of the unchanged content.
+        self._apply_reload_diff(disk_file_text)
         # Restore saved cursor position
         self.setCursorPosition(temp_position[0], temp_position[1])
         self.setFirstVisibleLine(first_visible_line)
         # Reset text changed indication
         self.reset_text_changed()
+        self.modification_time = os.path.getmtime(self.save_path)
 
     def copy(self):
         super().copy()
@@ -2400,9 +2403,9 @@ class Bookmarks:
                 handle = self._parent.markerAdd(
                     scintilla_line, self._parent.bookmark_marker
                 )
-                self._parent.main_form.bookmarks.marks[new_marker_index][
-                    "handle"
-                ] = handle
+                self._parent.main_form.bookmarks.marks[new_marker_index]["handle"] = (
+                    handle
+                )
         else:
             self._parent.main_form.bookmarks.remove_by_reference(self._parent, line)
             self._parent.markerDelete(scintilla_line, self._parent.bookmark_marker)

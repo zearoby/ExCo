@@ -6,6 +6,10 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import builtins
 import keyword
 import re
@@ -16,6 +20,7 @@ import settings
 import functions
 import lexers
 import qt
+from lexers.baselexer import BaseLexer
 
 
 class Python(qt.QsciLexerPython):
@@ -24,8 +29,8 @@ class Python(qt.QsciLexerPython):
     """
 
     # Class variables
-    _kwrds = None
-    styles = {
+    _kwrds: Any = None
+    styles: dict[str, int] = {
         "Default": 0,
         "Comment": 1,
         "Number": 2,
@@ -49,22 +54,24 @@ class Python(qt.QsciLexerPython):
     }
 
     # Characters that autoindent one level on pressing Return/Enter
-    autoindent_characters = [":"]
+    autoindent_characters: list[str] = [":"]
 
-    def __init__(self, parent=None, additional_keywords=[]):
+    def __init__(self, parent: Any = None, additional_keywords: list[str] | None = None) -> None:
         """Overridden initialization"""
         # Initialize superclass
         super().__init__()
         # Set default colors
         self.setDefaultColor(qt.QColor(settings.get_theme()["fonts"]["default"]["color"]))
         self.setDefaultPaper(qt.QColor(settings.get_theme()["fonts"]["default"]["background"]))
-        self.setDefaultFont(qt.QFont(settings.get("current_font_name"), settings.get("current_font_size")))
+        self.setDefaultFont(
+            qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
+        )
         # Initialize the keyword list
         self.init_kwrds(additional_keywords)
         # Set the theme
         self.set_theme(settings.get_theme())
 
-    def init_kwrds(self, additional_keywords=[]):
+    def init_kwrds(self, additional_keywords: list[str] | None = None):
         # Initialize list with keywords
         built_ins = keyword.kwlist
         if hasattr(keyword, "softkwlist"):
@@ -72,6 +79,8 @@ class Python(qt.QsciLexerPython):
         for i in builtins.__dict__.keys():
             if not (i in built_ins):
                 built_ins.append(i)
+        if additional_keywords is None:
+            additional_keywords = []
         self._kwrds = list(set(built_ins + additional_keywords))
         self._kwrds.sort()
         # Transform list into a single string with spaces between list items
@@ -99,7 +108,7 @@ class Python(qt.QsciLexerPython):
             return None
 
 
-class CustomPython(qt.QsciLexerCustom):
+class CustomPython(BaseLexer):
     class Sequence:
         def __init__(self, start, stop_sequences, stop_characters, style, add_to_style):
             self.start = start
@@ -166,7 +175,7 @@ class CustomPython(qt.QsciLexerCustom):
     # Characters that autoindent one level on pressing Return/Enter
     autoindent_characters = [":"]
 
-    def __init__(self, parent=None, additional_keywords=[]):
+    def __init__(self, parent: Any = None, additional_keywords: list[str] | None = None):
         """Overridden initialization"""
         # Initialize superclass
         super().__init__()
@@ -175,7 +184,8 @@ class CustomPython(qt.QsciLexerCustom):
         CustomPython._index += 1
         # Set the additional keywords
         self.additional_list = ["self"]
-        self.additional_list.extend(additional_keywords)
+        if additional_keywords is not None:
+            self.additional_list.extend(additional_keywords)
         if lexers.nim_lexers_found == True:
             lexers.nim_lexers.python_set_keywords(self.index, additional_keywords)
         # Set the default style values
@@ -202,9 +212,6 @@ class CustomPython(qt.QsciLexerCustom):
 
     def braceStyle(self):
         return self.styles["Default"]
-
-    def defaultFont(self, style):
-        return qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
 
     def set_theme(self, theme):
         for style in self.styles:
@@ -243,8 +250,7 @@ class CustomPython(qt.QsciLexerCustom):
             # Initialize comment state and split the text into tokens
             sequence = None
             tokens = [
-                (token, len(bytearray(token, "utf-8")))
-                for token in self.splitter.findall(text)
+                (token, len(bytearray(token, "utf-8"))) for token in self.splitter.findall(text)
             ]
             # Check if there is a style(comment, string, ...) stretching on from the previous line
             if start != 0:
@@ -288,9 +294,7 @@ class CustomPython(qt.QsciLexerCustom):
                                     if token_name in self.keyword_list:
                                         setStyling(token_length, self.styles["Keyword"])
                                     elif token_name in self.additional_list:
-                                        setStyling(
-                                            token_length, self.styles["CustomKeyword"]
-                                        )
+                                        setStyling(token_length, self.styles["CustomKeyword"])
                                     else:
                                         setStyling(token_length, self.styles["Default"])
                             break

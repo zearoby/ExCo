@@ -6,6 +6,10 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import re
 
 import qt
@@ -13,14 +17,15 @@ import data
 import settings
 import functions
 import lexers
+from lexers.baselexer import BaseLexer
 
 
-class SKILL(qt.QsciLexerCustom):
+class SKILL(BaseLexer):
     """
     Custom lexer for the SKILL programming languages
     """
 
-    styles = {
+    styles: dict[str, int] = {
         "Default": 0,
         "Comment": 1,
         "PredefinedFunctions": 2,
@@ -30,7 +35,7 @@ class SKILL(qt.QsciLexerCustom):
         "Operator": 6,
     }
     # Class variables
-    keyword_dictionary = {
+    keyword_dictionary: dict[str, tuple[str, ...]] = {
         "PredefinedFunctions": (
             "alphalessp",
             "alphaNumCmp",
@@ -364,7 +369,7 @@ class SKILL(qt.QsciLexerCustom):
     # Comment tokens
     tokens_comment = []
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Any = None) -> None:
         """
         Overridden initialization
         """
@@ -379,26 +384,23 @@ class SKILL(qt.QsciLexerCustom):
         # Set the theme
         self.set_theme(settings.get_theme())
 
-    def language(self):
+    def language(self) -> str:
         return "SKILL"
 
-    def description(self, style):
+    def description(self, style: int) -> str:
         if style < len(self.styles):
             description = "Custom lexer for the SKILL circuit languages"
         else:
             description = ""
         return description
 
-    def defaultStyle(self):
+    def defaultStyle(self) -> int:
         return self.styles["Default"]
 
-    def braceStyle(self):
+    def braceStyle(self) -> int:
         return self.styles["Default"]
 
-    def defaultFont(self, style):
-        return qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
-
-    def set_theme(self, theme):
+    def set_theme(self, theme: dict[str, Any]) -> None:
         for style in self.styles:
             # Papers
             self.setPaper(
@@ -408,7 +410,7 @@ class SKILL(qt.QsciLexerCustom):
             # Fonts
             lexers.set_font(self, style, theme["fonts"][style.lower()])
 
-    def styleText(self, start, end):
+    def styleText(self, start: int, end: int) -> None:
         """
         Overloaded method for styling text.
         """
@@ -428,10 +430,7 @@ class SKILL(qt.QsciLexerCustom):
         # Initialize various states and split the text into tokens
         stringing = False
         commenting = False
-        tokens = [
-            (token, len(bytearray(token, "utf-8")))
-            for token in self.splitter.findall(text)
-        ]
+        tokens = [(token, len(bytearray(token, "utf-8"))) for token in self.splitter.findall(text)]
         # Style the tokens accordingly
         for i, token in enumerate(tokens):
             if commenting == True:

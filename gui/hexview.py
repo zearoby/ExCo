@@ -7,8 +7,9 @@ For complete license information of the dependencies, check the 'additional_lice
 """
 
 import os
+from typing import Optional
+
 import qt
-import data
 import constants
 import functions
 import components.internals
@@ -39,6 +40,21 @@ class HexView(qt.QFrame):
         self.current_icon = functions.create_icon("various/node_template.png")
         self.internals = components.internals.Internals(parent=self, tab_widget=parent)
         self.internals.update_icon(self)
+
+        # Store the modification time for change detection
+        modification_time: Optional[float] = None
+        try:
+            modification_time = os.path.getmtime(file_path)
+        except OSError:
+            pass
+        self.modification_time = modification_time
+
+        # Register with the shared path watcher (only remove what we added)
+        self._added_watch = False
+        main_form_tools = getattr(main_form, "tools", None)
+        if main_form_tools is not None:
+            if main_form_tools.pathwatcher_add(file_path):
+                self._added_watch = True
 
         # Initialize widgets
         self.__initialize_view()
@@ -188,6 +204,10 @@ class HexView(qt.QFrame):
         with open(self.save_path, "rb") as f:
             content = f.read()
         self.show_file_hex_data(content)
+        try:
+            self.modification_time = os.path.getmtime(self.save_path)
+        except OSError:
+            self.modification_time = None
 
     def update_style(self):
         # Frame
@@ -213,6 +233,13 @@ class HexView(qt.QFrame):
         for k, v in self.__cache_comboboxes.items():
             v.update_style()
 
+    def shutdown(self) -> None:
+        if not self._added_watch:
+            return
+        tools = getattr(self.main_form, "tools", None)
+        if tools is not None:
+            tools.pathwatcher_remove(self.save_path)
+
 
 class HexTable(qt.QTableView):
     def __init__(self, parent, main_form):
@@ -236,10 +263,11 @@ class HexTableModel(qt.QAbstractTableModel):
     def __init__(self, row_data, parent=None):
         super().__init__(parent)
         self.__row_data = row_data
-        self.__last_index = len(row_data[0]) - 1
-        self.__headers = {0: "Address", self.__last_index: "ASCII"}
-        for i in range(len(row_data[0]) - 2):
-            self.__headers[i + 1] = "{:02x}".format(i)
+        if (row_data is not None) and (len(row_data) > 0):
+            self.__last_index = len(row_data[0]) - 1
+            self.__headers = {0: "Address", self.__last_index: "ASCII"}
+            for i in range(len(row_data[0]) - 2):
+                self.__headers[i + 1] = "{:02x}".format(i)
 
     def rowCount(self, parent=None):
         return len(self.__row_data)

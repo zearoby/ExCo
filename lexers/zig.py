@@ -6,6 +6,10 @@ For more information check the 'LICENSE.txt' file.
 For complete license information of the dependencies, check the 'additional_licenses' directory.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import re
 
 import data
@@ -13,14 +17,15 @@ import settings
 import functions
 import lexers
 import qt
+from lexers.baselexer import BaseLexer
 
 
-class Zig(qt.QsciLexerCustom):
+class Zig(BaseLexer):
     """
     Custom lexer for the Zig programming languages
     """
 
-    styles = {
+    styles: dict[str, int] = {
         "Default": 0,
         "Comment": 1,
         "keyword1": 2,
@@ -36,14 +41,14 @@ class Zig(qt.QsciLexerCustom):
         "Number": 12,
         "Operator": 13,
     }
-    keyword_remap = {
+    keyword_remap: dict[str, str] = {
         "Keywords": "keyword",
         "Builtins": "keyword1",
         "Types": "keyword3",
         "Fields": "keyword3",
     }
     # Class variables
-    keyword_dictionary = {
+    keyword_dictionary: dict[str, tuple[str, ...]] = {
         "Keywords": (
             "align",
             "allowzero",
@@ -287,7 +292,7 @@ class Zig(qt.QsciLexerCustom):
     # Comment tokens
     tokens_comment = ["//", "///"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Any = None) -> None:
         """
         Overridden initialization
         """
@@ -302,26 +307,23 @@ class Zig(qt.QsciLexerCustom):
         # Set the theme
         self.set_theme(settings.get_theme())
 
-    def language(self):
+    def language(self) -> str:
         return "Zig"
 
-    def description(self, style):
+    def description(self, style: int) -> str:
         if style < len(self.styles):
             description = "Custom lexer for the Zig languages"
         else:
             description = ""
         return description
 
-    def defaultStyle(self):
+    def defaultStyle(self) -> int:
         return self.styles["Default"]
 
-    def braceStyle(self):
+    def braceStyle(self) -> int:
         return self.styles["Default"]
 
-    def defaultFont(self, style):
-        return qt.QFont(settings.get("current_font_name"), settings.get("current_font_size"))
-
-    def set_theme(self, theme):
+    def set_theme(self, theme: dict[str, Any]) -> None:
         for style in self.styles:
             # Papers
             self.setPaper(
@@ -331,7 +333,7 @@ class Zig(qt.QsciLexerCustom):
             # Fonts
             lexers.set_font(self, style, theme["fonts"][style.lower()])
 
-    def styleText(self, start, end):
+    def styleText(self, start: int, end: int) -> None:
         """
         Overloaded method for styling text.
         """
@@ -352,10 +354,7 @@ class Zig(qt.QsciLexerCustom):
         stringing = False
         multiline_stringing = False
         commenting = False
-        tokens = [
-            (token, len(bytearray(token, "utf-8")))
-            for token in self.splitter.findall(text)
-        ]
+        tokens = [(token, len(bytearray(token, "utf-8"))) for token in self.splitter.findall(text)]
         # Style the tokens accordingly
         for i, token in enumerate(tokens):
             if commenting == True:

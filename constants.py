@@ -8,6 +8,56 @@ For complete license information of the dependencies, check the 'additional_lice
 
 import enum
 
+
+class LanguageIcon(enum.Enum):
+    PYTHON = "language_icons/logo_python.png"
+    CYTHON = "language_icons/logo_cython.png"
+    C = "language_icons/logo_c.png"
+    AWK = "language_icons/logo_awk.png"
+    C_CPP = "language_icons/logo_c_cpp.png"
+    CIDODE = "language_icons/logo_cicode.png"
+    OBERON_MODULA = "language_icons/logo_oberon.png"
+    D = "language_icons/logo_d.png"
+    NIM = "language_icons/logo_nim.png"
+    ADA = "language_icons/logo_ada.png"
+    CMAKE = "language_icons/logo_cmake.png"
+    CSS = "language_icons/logo_css.png"
+    HTML = "language_icons/logo_html.png"
+    JSON = "language_icons/logo_json.png"
+    LUA = "language_icons/logo_lua.png"
+    MATLAB = "language_icons/logo_matlab.png"
+    PERL = "language_icons/logo_perl.png"
+    RUBY = "language_icons/logo_ruby.png"
+    TCL = "language_icons/logo_tcl.png"
+    TEX = "language_icons/logo_tex.png"
+    IDL = "language_icons/logo_idl.png"
+    BASH = "language_icons/logo_bash.png"
+    BATCH = "language_icons/logo_batch.png"
+    FORTRAN = "language_icons/logo_fortran.png"
+    FORTRAN77 = "language_icons/logo_fortran77.png"
+    COFFEESCRIPT = "language_icons/logo_coffeescript.png"
+    C_SHARP = "language_icons/logo_csharp.png"
+    JAVA = "language_icons/logo_java.png"
+    JAVASCRIPT = "language_icons/logo_javascript.png"
+    MAKEFILE = "language_icons/logo_makefile.png"
+    OCTAVE = "language_icons/logo_octave.png"
+    PASCAL = "language_icons/logo_pascal.png"
+    POSTSCRIPT = "language_icons/logo_postscript.png"
+    ROUTEROS = "language_icons/logo_routeros.png"
+    SPICE = "language_icons/logo_spice.png"
+    SQL = "language_icons/logo_sql.png"
+    VERILOG = "language_icons/logo_verilog.png"
+    VHDL = "language_icons/logo_vhdl.png"
+    XML = "language_icons/logo_xml.png"
+    YAML = "language_icons/logo_yaml.png"
+    ZIG = "language_icons/logo_zig.png"
+    RUST = "language_icons/logo_rust.png"
+    GO = "language_icons/logo_go.png"
+    INI = "tango_icons/document-properties.png"
+    TEXT = "tango_icons/text-x-generic.png"
+    UNKNOWN = "tango_icons/file.png"
+
+
 # File extension lists
 supported_file_extentions = {
     # "assembly": [".s", ".S", ".Asm"],
@@ -50,6 +100,7 @@ supported_file_extentions = {
     ],
     "json": [".json"],
     "lua": [".lua"],
+    "markdown": [".md", ".markdown"],
     "nim": [".nim", ".nims", ".nimble"],
     "oberon/modula": [".mod", ".ob", ".ob2", ".cp"],
     "octave": [".m"],
@@ -72,6 +123,8 @@ supported_file_extentions = {
     "xml": [".xml", ".tpy"],
     "yaml": [".yml", ".yaml"],
     "zig": [".zig", ".zon"],
+    "rust": [".rs"],
+    "go": [".go"],
 }
 
 
@@ -90,6 +143,7 @@ class FileStatus(enum.Enum):
 class FileType(enum.Enum):
     Text = 0
     Hex = 1
+    Markdown = 2
 
 
 class CanSave:
@@ -171,6 +225,12 @@ class DialogResult(enum.Enum):
     SaveAndClose = 8
     SaveAndRestore = 9
     SwitchToLargestWindow = 10
+    RecycleBin = 11
+    PermanentDelete = 12
+    Rename = 13
+    OverwriteAll = 14
+    SkipAll = 15
+    RenameAll = 16
 
 
 class FormatterType(enum.Enum):
