@@ -91,6 +91,23 @@ from .system import System
 from .view import View
 
 
+def _file_access_message(path: str) -> str:
+    """
+    Return the message that explains why *path* cannot be opened as a file.
+
+    `os.path.isfile` swallows the OSError, so it reports a file the process is
+    denied to stat (eg. 'C:/Windows/System32/config/SAM') exactly like a
+    missing one; stat it again to tell the two apart.
+    """
+    try:
+        os.stat(path)
+    except PermissionError:
+        return "Access denied:\n  '{}'".format(path)
+    except OSError:
+        return "File:\n  '{}'\ndoesn't exist!".format(path)
+    return "Path is not a file:\n  '{}'".format(path)
+
+
 class MainWindow(qt.QMainWindow):
     """
     Main form that holds all Qt objects
@@ -238,6 +255,9 @@ class MainWindow(qt.QMainWindow):
         self.setAttribute(qt.Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
         # Connect signals
         data.signal_dispatcher.update_title.connect(self.update_title)
+        data.signal_dispatcher.unhandled_exception.connect(
+            self.report_unhandled_exception
+        )
         # Store file arguments for opening after layout restoration
         self._startup_file_arguments = file_arguments
         # Always restore layout if enabled
@@ -388,6 +408,24 @@ class MainWindow(qt.QMainWindow):
 
         else:
             self.reset_title()
+
+    @qt.pyqtSlot(str)
+    def report_unhandled_exception(self, text: str) -> None:
+        """Show an exception that escaped a slot in the REPL Messages panel.
+
+        Called from the global exception hook through the signal dispatcher,
+        so the report always lands on the GUI thread. The application keeps
+        running; the full traceback is still written to the output file.
+        """
+        try:
+            display: Any = self.display
+            display.repl_display_error(
+                "Unhandled exception (application kept running):\n" + text
+            )
+            display.write_to_statusbar("Unhandled exception - see REPL Messages", 5000)
+        except Exception:
+            # Never let the reporter raise into the exception hook itself.
+            pass
 
     def init_statusbar(self):
         self.statusbar = qt.QStatusBar(self)
@@ -583,18 +621,36 @@ class MainWindow(qt.QMainWindow):
         """Display the current working directory in the systems explorer"""
         self.system.show_explorer()
 
-    def set_cwd(self, directory):
-        """Set the current working directory and display it"""
-        os.chdir(directory)
+    def set_cwd(self, directory: str) -> bool:
+        """Set the current working directory and display it.
+
+        Return False if the directory cannot be entered. An unhandled OSError
+        here used to reach the global exception hook, which quits the
+        application; a directory the user cannot access (eg. 'C:/PerfLogs')
+        must only produce a message and leave the current directory alone.
+        """
+        # The stubs type these attributes as None (see AGENTS.md).
+        display: Any = self.display
+        repl: Any = self.repl
+        try:
+            os.chdir(directory)
+        except OSError as error:
+            message = "Cannot change working directory to '{}':\n  {}".format(
+                directory, error.strerror or error
+            )
+            display.repl_display_error(message)
+            display.write_to_statusbar("Cannot change working directory!", 3000)
+            return False
         # Store the current REPL text
-        repl_text = self.repl.text()
+        repl_text: str = repl.text()
         # Reset the interpreter and update its references
         self.reset_interpreter()
         # Display the selected directory
-        self.display.repl_display_message("CWD changed to:")
+        display.repl_display_message("CWD changed to:")
         self.get_cwd()
         # Restore the previous REPL text
-        self.repl.setText(repl_text)
+        repl.setText(repl_text)
+        return True
 
     def update_cwd(self):
         """
@@ -614,7 +670,8 @@ class MainWindow(qt.QMainWindow):
         if window is None:
             return
         current_widget = window.currentWidget()
-        path = os.path.dirname(current_widget.save_path)
+        save_path = getattr(current_widget, "save_path", "")
+        path = os.path.dirname(save_path)
         # Check if the path is not an empty string
         if path == "":
             message = "Document path is not valid!"
@@ -1011,7 +1068,7 @@ class MainWindow(qt.QMainWindow):
             for file in files:
                 self.open_file(file, tab_widget)
 
-    def open_file(self, file=None, tab_widget=None, save_layout=False):
+    def open_file(self, file=None, tab_widget=None, save_layout=False, index=None):
         """
         Read file contents into a TabWidget
         """
@@ -1020,12 +1077,20 @@ class MainWindow(qt.QMainWindow):
             # Check if file exists
             if os.path.isfile(in_file) == False:
                 self.display.repl_display_message(
-                    "File: {}\ndoesn't exist!".format(in_file),
+                    _file_access_message(in_file),
                     message_type=constants.MessageType.ERROR,
                 )
                 return
             # Check the file size
-            file_size = functions.get_file_size_Mb(in_file)
+            try:
+                file_size = functions.get_file_size_Mb(in_file)
+            except OSError as error:
+                message = "Cannot access file:\n  '{}'\n  {}".format(
+                    in_file, error.strerror or error
+                )
+                self.display.repl_display_error(message)
+                self.display.write_to_statusbar("File cannot be accessed!", 3000)
+                return
             if file_size > 50:
                 # Create the warning message
                 warning = "The file is larger than 50 MB! ({:d} MB)\n".format(
@@ -1048,7 +1113,7 @@ class MainWindow(qt.QMainWindow):
 
             # Add new scintilla document tab to the basic widget
             new_tab = tab_widget.editor_add_document(
-                in_file, "file", bypass_check=False
+                in_file, "file", bypass_check=False, index=index
             )
             # Set the icon if it was set by the lexer
             new_tab.internals.update_icon(new_tab)
@@ -1072,6 +1137,8 @@ class MainWindow(qt.QMainWindow):
                         )
                     else:
                         new_tab.setText(file_text)
+                    # Pick up the file's line endings for saving
+                    new_tab.update_target_eol(in_file)
                     # Save the layout if needed
                     if save_layout == True:
                         self.view.layout_save()
@@ -1081,6 +1148,15 @@ class MainWindow(qt.QMainWindow):
                         message, message_type=constants.MessageType.ERROR
                     )
                     self.display.write_to_statusbar(message)
+                    tab_widget.widget(tab_widget.currentIndex()).setParent(None)
+                    tab_widget.removeTab(tab_widget.currentIndex())
+                    return None
+                except OSError as error:
+                    message = "Cannot read file:\n  '{}'\n  {}".format(
+                        in_file, error.strerror or error
+                    )
+                    self.display.repl_display_error(message)
+                    self.display.write_to_statusbar("File cannot be read!", 3000)
                     tab_widget.widget(tab_widget.currentIndex()).setParent(None)
                     tab_widget.removeTab(tab_widget.currentIndex())
                     return None
@@ -1146,12 +1222,20 @@ class MainWindow(qt.QMainWindow):
         # Check if file exists
         if os.path.isfile(file_path) == False:
             self.display.repl_display_message(
-                "File: {}\ndoesn't exist!".format(file_path),
+                _file_access_message(file_path),
                 message_type=constants.MessageType.ERROR,
             )
             return
         # Check the file size
-        file_size = functions.get_file_size_Mb(file_path)
+        try:
+            file_size = functions.get_file_size_Mb(file_path)
+        except OSError as error:
+            message = "Cannot access file:\n  '{}'\n  {}".format(
+                file_path, error.strerror or error
+            )
+            self.display.repl_display_error(message)
+            self.display.write_to_statusbar("File cannot be accessed!", 3000)
+            return
         if file_size > 50:
             # Create the warning message
             warning = "The file is larger than {0:d} MB! ({0:d} MB)\n".format(
@@ -1195,11 +1279,13 @@ class MainWindow(qt.QMainWindow):
             self.display.repl_display_error(message)
             self.display.write_to_statusbar("File cannot be read!", 3000)
 
-    def open_file_markdown(self, file_path, tab_widget=None, save_layout=False):
+    def open_file_markdown(
+        self, file_path, tab_widget=None, save_layout=False, index=None, line=None
+    ):
         # Check if file exists
         if os.path.isfile(file_path) == False:
             self.display.repl_display_message(
-                "File: {}\ndoesn't exist!".format(file_path),
+                _file_access_message(file_path),
                 message_type=constants.MessageType.ERROR,
             )
             return
@@ -1215,7 +1301,7 @@ class MainWindow(qt.QMainWindow):
             tab_widget = self.get_largest_window()
 
         # Add new markdown viewer document
-        new_tab = tab_widget.markdown_add(file_path)
+        new_tab = tab_widget.markdown_add(file_path, index=index, line=line)
         # Update the icon
         new_tab.internals.update_icon(new_tab)
 
@@ -1237,6 +1323,58 @@ class MainWindow(qt.QMainWindow):
             message = "File cannot be read!"
             self.display.repl_display_error(message)
             self.display.write_to_statusbar("File cannot be read!", 3000)
+
+    def open_terminal_in_directory(self, directory, tab_widget=None):
+        # Check if the directory exists
+        if os.path.isdir(directory) == False:
+            message = "Directory does not exist: {}".format(directory)
+            self.display.repl_display_message(
+                message, message_type=constants.MessageType.ERROR
+            )
+            self.display.write_to_statusbar("Directory does not exist!", 3000)
+            return
+        # A directory that exists but cannot be listed (eg. 'C:/PerfLogs')
+        # would silently start the shell somewhere else instead.
+        try:
+            with os.scandir(directory):
+                pass
+        except OSError as error:
+            message = "Cannot open a terminal in '{}':\n  {}".format(
+                directory, error.strerror or error
+            )
+            self.display.repl_display_error(message)
+            self.display.write_to_statusbar("Directory is not accessible!", 3000)
+            return
+
+        if tab_widget is None:
+            tab_widget = self.get_window_by_indication()
+            if tab_widget is None:
+                tab_widget = self.get_largest_window()
+
+        # Spawn the integrated terminal in the directory
+        new_terminal = tab_widget.terminal_add(cwd=directory)
+        if new_terminal is not None:
+            tab_widget.currentWidget().setFocus()
+            return new_terminal
+
+    def open_external_terminal(self, directory):
+        # Check if the directory exists
+        if os.path.isdir(directory) == False:
+            message = "Directory does not exist: {}".format(directory)
+            self.display.repl_display_message(
+                message, message_type=constants.MessageType.ERROR
+            )
+            self.display.write_to_statusbar("Directory does not exist!", 3000)
+            return
+        # Spawn the external terminal in the directory
+        if functions.open_terminal_in_directory(directory) == True:
+            self.display.write_to_statusbar(
+                "Terminal opened in: {}".format(directory), 3000
+            )
+        else:
+            message = "Could not open terminal in: {}".format(directory)
+            self.display.repl_display_error(message)
+            self.display.write_to_statusbar("Could not open the terminal!", 3000)
 
     def open_markdown_preview(self, file_path=None):
         # If no path is given, use the indicated tab

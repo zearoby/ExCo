@@ -11,12 +11,14 @@ from __future__ import annotations
 import functools
 from typing import Any, Callable
 
+import components.filteredit
 import components.fonts
 import components.thesquid
 import functions
 import qt
 import settings
 import themes
+from gui.custombuttons import StandardButton
 
 
 class SettingsGuiManipulator(qt.QFrame):
@@ -30,7 +32,8 @@ class SettingsGuiManipulator(qt.QFrame):
     DEFAULT_SIZE = (620, 600)
     INHERIT = "(inherit)"
     # Qsci end-of-line modes: value as stored in the "end_of_line_mode" setting
-    EOL_MODES = [(0, "LF (Unix)"), (1, "CRLF (Windows)"), (2, "CR (Mac)")]
+    # (0 = EolWindows/CRLF, 1 = EolMac/CR, 2 = EolUnix/LF)
+    EOL_MODES = [(0, "CRLF (Windows)"), (1, "CR (Mac)"), (2, "LF (Unix)")]
     TERMINAL_SHELLS = ["cmd.exe", "powershell.exe", "pwsh.exe", "/bin/bash"]
     # Class variables
     _parent: Any = None
@@ -66,9 +69,14 @@ class SettingsGuiManipulator(qt.QFrame):
         self.__shell_layout.setContentsMargins(qt.QMargins(0, 0, 0, 0))
         self.__top_bar = qt.QWidget(self)
         self.__top_bar.setObjectName("SettingsTopBar")
-        self.__top_layout = qt.QVBoxLayout(self.__top_bar)
+        # Match the fixed 28px height of the tree filter bar and the action
+        # footers, so the filter field (which stretches to fill) spans the bar
+        # edge to edge below a hairline. The side margins line up with the
+        # settings groups in the scroll area beneath.
+        self.__top_bar.setFixedHeight(28)
+        self.__top_layout = qt.QHBoxLayout(self.__top_bar)
         self.__top_layout.setSpacing(5)
-        self.__top_layout.setContentsMargins(qt.QMargins(9, 9, 9, 5))
+        self.__top_layout.setContentsMargins(qt.QMargins(0, 0, 0, 0))
         self.__shell_layout.addWidget(self.__top_bar)
         self.__scroll = qt.QScrollArea(self)
         self.__scroll.setObjectName("SettingsScroll")
@@ -108,10 +116,7 @@ class SettingsGuiManipulator(qt.QFrame):
                 self.terminal_font_size_spin,
                 int(v) if v else int(settings.get("current_editor_font_size")),
             ),
-            "custom_menu_font": lambda v: self._set_combo(
-                self.menu_font_combo,
-                str(v[0]) if v else self.INHERIT,
-            ),
+            "custom_menu_font": self.__sync_menu_font_controls,
             "editor": self.__sync_editor_controls,
             "restore_last_session": lambda v: self._set_check(
                 self.restore_session_checkbox, bool(v)
@@ -164,12 +169,14 @@ class SettingsGuiManipulator(qt.QFrame):
         applies the change immediately through the settings facade.
         """
         # Filter field that hides non-matching groups while typing.
-        # An empty field shows every group.
-        self.__filter_edit = qt.QLineEdit(self.__top_bar)
-        self.__filter_edit.setPlaceholderText("Filter settings\u2026")
-        self.__filter_edit.setClearButtonEnabled(True)
+        # An empty field shows every group. The shared FilterField gives it the
+        # same style, clear glyphs and Escape-to-clear as every other filter box.
+        self.__filter_edit = components.filteredit.FilterField(
+            self.__top_bar, "Filter settings\u2026"
+        )
         self.__filter_edit.textChanged.connect(self.__apply_settings_filter)
-        self.__top_layout.addWidget(self.__filter_edit)
+        self.__top_layout.addWidget(self.__filter_edit, 1)
+
         # ------------------------------------------------------------------
         # Fonts
         # ------------------------------------------------------------------
@@ -238,15 +245,18 @@ class SettingsGuiManipulator(qt.QFrame):
         self.menu_font_combo = qt.QComboBox(fonts_group)
         self._populate_family_combo(self.menu_font_combo, include_inherit=True)
         custom_menu_font = settings.get("custom_menu_font")
-        if custom_menu_font:
-            self.menu_font_combo.setCurrentText(str(custom_menu_font[0]))
+        menu_family = custom_menu_font[0] if custom_menu_font else None
+        if menu_family:
+            self.menu_font_combo.setCurrentText(str(menu_family))
         else:
             self.menu_font_combo.setCurrentIndex(0)
         self.menu_font_combo.currentTextChanged.connect(self.__menu_font_family_changed)
         self.menu_font_size_spin = qt.QSpinBox(fonts_group)
         self.menu_font_size_spin.setRange(1, 96)
         self.menu_font_size_spin.setValue(
-            int(custom_menu_font[1]) if custom_menu_font else 10
+            int(custom_menu_font[1])
+            if custom_menu_font
+            else int(settings.get("current_font_size"))
         )
         self.menu_font_size_spin.valueChanged.connect(self.__menu_font_size_changed)
         fonts_layout.addWidget(qt.QLabel("Menu:", fonts_group), 3, 0)
@@ -815,12 +825,26 @@ class SettingsGuiManipulator(qt.QFrame):
         self.__apply_menu_font()
 
     def __apply_menu_font(self) -> None:
-        family = self.menu_font_combo.currentText()
-        if family == self.INHERIT:
-            settings.set("custom_menu_font", None)
-        else:
-            settings.set("custom_menu_font", (family, self.menu_font_size_spin.value()))
+        text = self.menu_font_combo.currentText()
+        family: str | None = None if text == self.INHERIT else text
+        settings.set(
+            "custom_menu_font",
+            (family, self.menu_font_size_spin.value()),
+        )
         components.thesquid.TheSquid.update_styles()
+
+    def __sync_menu_font_controls(self, value: Any) -> None:
+        """
+        Reflect an external custom_menu_font change onto the family combo
+        and the size spin. An empty family means the application family is
+        inherited, but the custom size still applies.
+        """
+        family = value[0] if value else None
+        self._set_combo(self.menu_font_combo, str(family) if family else self.INHERIT)
+        self._set_spin(
+            self.menu_font_size_spin,
+            int(value[1]) if value else int(settings.get("current_font_size")),
+        )
 
     def __theme_changed(self, index: int) -> None:
         """
@@ -910,7 +934,6 @@ class SettingsGuiManipulator(qt.QFrame):
             "background-color: %s;"
             "color: %s;"
             "border: 1px solid %s;"
-            "border-radius: 3px;"
             "padding: 2px 8px 2px 8px;"
             "}"
             % (
@@ -1015,7 +1038,6 @@ QGroupBox {{
     background: transparent;
     color: {default_color};
     border: 1px solid {passive_border};
-    border-radius: 4px;
     margin-top: 8px;
     padding: 2px 6px 6px 6px;
     font-family: {font_name};
@@ -1033,7 +1055,6 @@ QComboBox, QSpinBox, QLineEdit {{
     background: {passive_background};
     color: {default_color};
     border: 1px solid {passive_border};
-    border-radius: 3px;
     padding: 1px 4px 1px 4px;
     font-family: {font_name};
     font-size: {font_size}pt;
@@ -1105,7 +1126,6 @@ QPushButton {{
     background: {passive_background};
     color: {default_color};
     border: 1px solid {passive_border};
-    border-radius: 3px;
     padding: 2px 8px 2px 8px;
     font-family: {font_name};
     font-size: {font_size}pt;
@@ -1130,7 +1150,6 @@ QCheckBox::indicator {{
     height: 14px;
     background: {passive_background};
     border: 1px solid {passive_border};
-    border-radius: 3px;
 }}
 QCheckBox::indicator:hover {{
     background: {hover};
@@ -1143,3 +1162,4 @@ QCheckBox::indicator:checked {{
 }}
         """
         )
+        self.__filter_edit.apply_filter_style()

@@ -46,7 +46,6 @@ from gui.plaineditor import PlainEditor
 from gui.settingsguimanipulator import SettingsGuiManipulator
 from gui.tabwidget import TabWidget
 from gui.templates import create_groupbox_with_layout
-from gui.textdiffer import TextDiffer
 from gui.thebox import TheBox
 from gui.treedisplays import TreeDisplay, TreeExplorer
 
@@ -112,7 +111,7 @@ class View:
         main_groupbox = qt.QGroupBox(self._parent)
         main_groupbox_layout = qt.QVBoxLayout(main_groupbox)
         main_groupbox_layout.addWidget(main_splitter)
-        main_groupbox_layout.setContentsMargins(2, 2, 2, 2)
+        main_groupbox_layout.setContentsMargins(0, 0, 0, 0)
         main_groupbox_layout.setSpacing(0)
         main_groupbox.setLayout(main_groupbox_layout)
         main_groupbox.setObjectName("Main_Groupbox")
@@ -455,6 +454,21 @@ QSplitter::handle {{
 
     __indication_state = None
 
+    def __focus_is_within(self, widget: qt.QWidget) -> bool:
+        """Whether the current keyboard focus belongs to *widget*.
+
+        A composite tab (a tree and its filter box, a diff, ...) keeps focus on
+        one of its inner widgets, never on the page widget itself, so checking
+        the page alone misses it: walk up from the actual focus widget instead.
+        """
+        focus: qt.QWidget | None = qt.QApplication.focusWidget()
+        current: qt.QWidget | None = focus
+        while current is not None:
+            if current is widget:
+                return True
+            current = current.parentWidget()
+        return False
+
     def __indication_check(self) -> None:
         """
         Check if any of the main windows or the REPL is focused
@@ -492,19 +506,9 @@ QSplitter::handle {{
             else:
                 window.indicated = False
                 for i in range(window.count()):
-                    if isinstance(window.widget(i), TextDiffer) == True:
-                        if (
-                            window.widget(i).hasFocus() == True
-                            or window.widget(i).editor_1.hasFocus() == True
-                            or window.widget(i).editor_2.hasFocus() == True
-                        ):
-                            indication_list[window] = True
-                            window_indicated_flag = True
-                    else:
-                        w = window.widget(i)
-                        if w.hasFocus() == True:
-                            indication_list[window] = True
-                            window_indicated_flag = True
+                    if self.__focus_is_within(window.widget(i)):
+                        indication_list[window] = True
+                        window_indicated_flag = True
 
         if window_indicated_flag:
             for k, v in indication_list.items():
@@ -797,11 +801,14 @@ QSplitter::handle {{
                                 # Newer layouts persist the shell; fall back to
                                 # the default when restoring older ones.
                                 shell = widget_data[1] if len(widget_data) > 2 else None
-                                new_terminal = new_tabs.terminal_add(shell=shell)
+                                # Spawn directly in the stored directory when it
+                                # still exists, otherwise use the default.
                                 if working_path is not None and os.path.isdir(
                                     working_path
                                 ):
-                                    new_terminal.set_cwd(working_path)
+                                    new_tabs.terminal_add(shell=shell, cwd=working_path)
+                                else:
+                                    new_tabs.terminal_add(shell=shell)
 
                             elif cls == constants.SpecialTabNames.Messages.value:
                                 self._parent.repl_messages_tab = (

@@ -31,6 +31,8 @@ Settings tables
 editor = {
     "default": {
         "autocompletion": False,
+        "auto_copy_on_select": False,  # copy a finished terminal/editor
+        # selection to the clipboard automatically
         "brace_color": "#80ff9900",
         "cursor_line_visible": False,
         "edge_marker_color": "#ffb4b4b4",
@@ -39,6 +41,8 @@ editor = {
         "end_of_line_mode": 2,
         "maximum_highlights": 300,
         "tab_width": 4,
+        "text_differ_async_line_limit": 20000,  # diff above this many total
+        # lines is computed on a worker thread instead of the GUI thread
         "word_wrap": False,
         "zoom_factor": 0,
         "makefile_uses_tabs": True,
@@ -82,6 +86,7 @@ keyboard_shortcuts = {
             "cwd_tree": "F7",
             "cwd_explorer": "Alt+F7",
             "new_cwd_tree": "Ctrl+F7",
+            "filter_tree": "Ctrl+Alt+F",
             "find": "Ctrl+F",
             "find_and_replace": "Ctrl+Shift+F",
             "find_brace": "Ctrl+J",
@@ -131,6 +136,9 @@ keyboard_shortcuts = {
             "toggle_mode": "F5",
             "toggle_wrap": "Ctrl+P",
             "upper_focus": "Ctrl+2",
+            "text_difference_unique_1": "Ctrl+Alt+1",
+            "text_difference_unique_2": "Ctrl+Alt+2",
+            "text_difference_similar": "Ctrl+Alt+3",
             "function_wheel_toggle": "F1",
             "settings_manipulator_toggle": "F2",
             "select_tab_left": "Ctrl+,",

@@ -47,10 +47,20 @@ class CustomEditor(BaseEditor):
     savable = constants.CanSave.NO
     embedded = False
     modification_time = None
+    # Fingerprint (hash) of the document content at the latest save point.
+    # Compares undo/redo results against the last saved/loaded state so the tab
+    # title asterisk is cleared only when content actually matches the file.
+    _saved_text_hash: int = hash("")
     # Current document type, initialized to text
     current_file_type = "TEXT"
+    # Line ends used when this document is written to disk (detected from
+    # the file on load, updated by an explicit line_ending save). The buffer
+    # itself always holds LF; None falls back to the "end_of_line_mode" setting.
+    _target_eol: str | None = None
     # Current tab icon
     current_icon = None
+    # Layout index of the 'Change lexer' corner button (rightmost button)
+    _lexer_button_index = 0
     internals = None
     # Comment character/s that will be used in comment/uncomment functions
     comment_string = None
@@ -85,7 +95,7 @@ class CustomEditor(BaseEditor):
     def __del__(self):
         try:
             # Clean up references
-            self.line_list.parent = None
+            self.line_list._parent = None
             self.line_list._clear()
             self._parent = None
             self.main_form = None
@@ -145,8 +155,11 @@ class CustomEditor(BaseEditor):
         # Set margin width and font
         self.setMarginWidth(0, "00")
         self.setMarginsFont(settings.get_editor_font())
-        # Reset the modified status of the document
+        # Reset the modified status of the document and record the fingerprint
+        # of the pristine content so the save-point handler can tell whether an
+        # undo/redo actually returned the document to the on-disk state.
         self.setModified(False)
+        self._saved_text_hash = self._document_hash()
         # Set brace matching
         self.setBraceMatching(qt.QsciScintilla.BraceMatch.SloppyBraceMatch)
         self.setMatchedBraceBackgroundColor(
@@ -167,10 +180,9 @@ class CustomEditor(BaseEditor):
         self.setBackspaceUnindents(True)
         # Scintilla widget must not accept drag/drop events, the cursor freezes if it does!!!
         self.setAcceptDrops(False)
-        # Set line endings to be Unix style ("\n")
-        self.setEolMode(
-            qt.QsciScintilla.EolMode(settings.get("editor")["end_of_line_mode"])
-        )
+        # The buffer always holds LF line ends; the file's own line endings
+        # are applied only when the document is written to disk
+        self.setEolMode(qt.QsciScintilla.EolMode.EolUnix)
         # Set the initial zoom factor
         self.zoomTo(settings.get("editor")["zoom_factor"])
         # Set multi-paste
@@ -205,6 +217,12 @@ class CustomEditor(BaseEditor):
         self.linesChanged.connect(self.__lines_changed)
         self.selectionChanged.connect(self.__selection_changed)
         self.SCN_MODIFIED.connect(self.__text_modified)
+        # Scintilla save point notifications: they fire when an undo/redo
+        # carries the document back into (or out of) the state it had when the
+        # save point was last set, letting us drop the "edited" asterisk only
+        # when the content truly matches the file on disk.
+        self.SCN_SAVEPOINTREACHED.connect(self.__savepoint_reached)
+        self.SCN_SAVEPOINTLEFT.connect(self.__savepoint_left)
         self.SendScintilla(
             self.SCI_SETMODEVENTMASK,
             self.SC_MOD_INSERTTEXT | self.SC_MOD_DELETETEXT,
@@ -280,7 +298,7 @@ class CustomEditor(BaseEditor):
         # Set tab space indentation width
         self.setTabWidth(editor_settings["tab_width"])
         # Set line endings to be Unix style ("\n")
-        self.setEolMode(qt.QsciScintilla.EolMode(editor_settings["end_of_line_mode"]))
+        self.setEolMode(qt.QsciScintilla.EolMode.EolUnix)
         # Set the initial zoom factor
         self.zoomTo(editor_settings["zoom_factor"])
         # Set cursor line visibility and color
@@ -350,6 +368,46 @@ class CustomEditor(BaseEditor):
                     annotationLinesAdded,
                 )
 
+    def _document_hash(self) -> int:
+        """Hash of the current document content (normalized line endings)."""
+        return hash(self._normalize_line_endings(self.text()))
+
+    def anchor_savepoint(self) -> None:
+        """Anchor the Scintilla save point at the current document content."""
+        self._saved_text_hash = self._document_hash()
+        self.SendScintilla(self.SCI_SETSAVEPOINT)
+
+    def __savepoint_reached(self):
+        """Document was undone/redone back to the anchored save point.
+
+        Clear the edited-asterisk and the MODIFIED status only when the content
+        really matches the last saved/loaded state; undoing past the save point
+        re-anchors Scintilla's save point to the earlier state, which would
+        falsely clear the asterisk without this content hash guard.
+        """
+        if self.savable != constants.CanSave.YES:
+            return
+        if self._document_hash() != self._saved_text_hash:
+            return
+        self.save_status = constants.FileStatus.OK
+        index = self._parent.indexOf(self)
+        if index != -1:
+            self._parent.setTabText(index, self._parent.tabText(index).strip("*"))
+
+    def __savepoint_left(self):
+        """Document left the save point: ensure it is marked modified.
+
+        The regular text change handler already marks the document dirty on
+        every edit and undo/redo step; this only reinforces that state when
+        Scintilla reports the save point being left.
+        """
+        if self.savable != constants.CanSave.YES:
+            return
+        self.save_status = constants.FileStatus.MODIFIED
+        index = self._parent.indexOf(self)
+        if index != -1:
+            self._parent.set_text_changed(index)
+
     def _init_special_functions(self):
         """Initialize the methods for document manipulation"""
         # Set references to the special functions
@@ -378,15 +436,32 @@ class CustomEditor(BaseEditor):
         # Add/remove bookmark
         self.bookmarks.toggle_at_line(adjusted_line)
 
+    def _sync_bookmark_lines(self) -> None:
+        """Re-read the stored bookmark line numbers from the markers' actual
+        positions. Records whose marker no longer exists (its line was removed
+        by a reload or a bulk edit, or the marker was deleted directly) are
+        dropped instead of being left pointing at line 0."""
+        main_form: Any = self.main_form
+        marks = main_form.bookmarks.marks
+        for i in marks:
+            if marks[i]["editor"] != self:
+                continue
+            handle = marks[i]["handle"]
+            if isinstance(handle, int) and handle >= 0:
+                line = self.markerLine(handle) + 1
+            else:
+                line = 0
+            if line < 1:
+                # The marker is gone, remove the stale bookmark record
+                main_form.bookmarks.remove_by_number(i)
+            else:
+                marks[i]["line"] = line
+
     def __lines_changed(self):
         """
         Signal that fires when the number of lines changes
         """
-        bookmarks = self.main_form.bookmarks.marks
-        for i in bookmarks:
-            if bookmarks[i]["editor"] == self:
-                line = self.markerLine(bookmarks[i]["handle"]) + 1
-                bookmarks[i]["line"] = line
+        self._sync_bookmark_lines()
 
     selection_lock = False
 
@@ -436,7 +511,9 @@ class CustomEditor(BaseEditor):
                     lexer_instance = lexer()
                     self.set_lexer(lexer_instance, lexer_name)
                     # Change the corner widget (button) icon
-                    self.internals.update_corner_button_icon(self.current_icon)
+                    self.internals.update_corner_button_icon(
+                        self.current_icon, index=self._lexer_button_index
+                    )
                     self.internals.update_icon(self)
                     # Display the lexer change
                     message = "Lexer changed to: {}".format(lexer_name)
@@ -453,8 +530,24 @@ class CustomEditor(BaseEditor):
             cursor = qt.QCursor.pos()
             lexers_menu.popup(cursor)
 
-        # Edit session
-        self.internals.add_corner_button(
+        # Markdown view switch (only for markdown files); leftmost button
+        if functions.get_file_type(self.save_path) == "markdown":
+
+            def switch_to_markdown():
+                index = self._parent.indexOf(self)
+                if index < 0:
+                    return
+                first_visible = self.firstVisibleLine() + 1
+                self._parent.switch_to_markdown_view(index, first_visible)
+
+            self.internals.add_corner_button(
+                "tango_icons/document-print-preview.png",
+                "Switch to Markdown view",
+                switch_to_markdown,
+            )
+
+        # Edit session (rightmost button)
+        self._lexer_button_index = self.internals.add_corner_button(
             self.current_icon, "Change the current lexer", show_lexer_menu
         )
 
@@ -478,31 +571,35 @@ class CustomEditor(BaseEditor):
             super().keyPressEvent(event)
             # Check for autoindent character list
             if hasattr(self.lexer(), "autoindent_characters"):
-                line_number = self.get_line_number()
+                current_line = self.getCursorPosition()[0]
+                # The previous line only exists when Enter split a line below
+                # the top of the document
+                if current_line < 1:
+                    return
+                previous_line = self.line_list[current_line - 1]
                 # Check that the last line is valid
-                if len(self.line_list[line_number - 1]) == 0:
+                if len(previous_line) == 0:
                     return
-                elif len(self.line_list[line_number - 1].rstrip()) == 0:
+                elif len(previous_line.rstrip()) == 0:
                     return
-                last_character = self.line_list[line_number - 1].rstrip()[-1]
-                last_word = self.line_list[line_number - 1].split()[-1].lower()
+                last_character = previous_line.rstrip()[-1]
+                last_word = previous_line.split()[-1].lower()
                 if (
                     last_character in self.lexer().autoindent_characters
                     or last_word in self.lexer().autoindent_characters
                 ):
-                    line = self.line_list[line_number]
-                    stripped_line = self.line_list[line_number].strip()
+                    line = self.line_list[current_line]
+                    stripped_line = line.strip()
                     if stripped_line == "":
-                        self.line_list[line_number] = (
-                            self.line_list[line_number]
-                            + " " * settings.get("editor")["tab_width"]
+                        self.line_list[current_line] = (
+                            line + " " * settings.get("editor")["tab_width"]
                         )
                         self.setCursorPosition(
-                            line_number - 1, len(self.line_list[line_number])
+                            current_line, len(self.line_list[current_line])
                         )
                     else:
                         whitespace = len(line) - len(line.lstrip())
-                        self.line_list[line_number] = (
+                        self.line_list[current_line] = (
                             " " * whitespace
                             + " " * settings.get("editor")["tab_width"]
                             + stripped_line
@@ -510,7 +607,7 @@ class CustomEditor(BaseEditor):
                         # The line is not empty, move the cursor to the first
                         # non-whitespace character
                         self.setCursorPosition(
-                            line_number - 1,
+                            current_line,
                             whitespace + settings.get("editor")["tab_width"],
                         )
         else:
@@ -594,17 +691,14 @@ class CustomEditor(BaseEditor):
         self.main_form.view.indication_check()
 
     def replaceSelectedText(self, *args, **kwargs):
-        marks = self.main_form.bookmarks.get_editor_all(self)
-        mark_data = []
-        for mark in marks:
-            mark_data.append((mark["line"], mark))
-        for line, mark in mark_data:
-            self.bookmarks.remove_marker_at_line(line)
+        # Let Scintilla move the bookmark markers along with the edited text
+        # instead of re-anchoring them at their old line numbers, then re-sync
+        # the stored line numbers with the markers' actual positions. This
+        # keeps bookmarks on the same content when lines are added or removed
+        # above them (indent/unindent, line removal, comment toggles,
+        # find&replace, code formatters).
         super().replaceSelectedText(*args, **kwargs)
-        for line, mark in mark_data:
-            new_handle = self.bookmarks.add_marker_at_line(line)
-            mark["line"] = line
-            mark["handle"] = new_handle
+        self._sync_bookmark_lines()
 
     """
     Line manipulation functions
@@ -643,51 +737,62 @@ class CustomEditor(BaseEditor):
         # Replace the line with an empty string
         self.replaceSelectedText("")
 
-    def replace_line(self, replace_text, line_number):
+    def replace_line(self, replace_text: str, line_number: int) -> None:
         """
         Replace an entire line in a scintilla document
             - line_number has to be as displayed in a QScintilla widget, which is ""from 1 to number_of_lines""
         """
         # Check if the selected line is within the line boundaries of the current document
         line_number = self.check_line_numbering(line_number)
-        # Select the whole line text, "tab.lineLength(line_number)" doesn't work because a single UTF-8 character has the length of 2
-        self.setSelection(line_number, 0, line_number + 1, 0)
-        # Replace the selected text with the new
-        if "\n" in self.selectedText() or "\r\n" in self.selectedText():
+        if line_number < self.lines() - 1:
+            # Select the whole line including its line end
+            self.setSelection(line_number, 0, line_number + 1, 0)
             self.replaceSelectedText(replace_text + "\n")
         else:
             # The last line, do not add the newline character
+            self.setSelection(line_number, 0, line_number, len(self.text(line_number)))
             self.replaceSelectedText(replace_text)
 
-    def set_line(self, line_text, line_number):
+    def set_line(self, line_text: str, line_number: int) -> None:
         """Set the text of a line"""
         self.replace_line(line_text, line_number)
 
-    def _transform_lines(self, line_from, line_to, transform_func):
-        """Apply transform_func to each line in [line_from-1, line_to-1] and replace."""
-        line_from -= 1
-        line_to -= 1
-        if line_from < 0:
-            line_from = 0
-        if line_to < 0:
-            line_to = 0
-        if line_to == self.lines() - 1:
-            self.setSelection(line_from, 0, line_to, len(self.text(line_to)))
-        else:
-            self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
+    def _transform_lines(
+        self, line_from: int, line_to: int, transform_func: Any
+    ) -> None:
+        """Apply transform_func to each line in [line_from, line_to)
+        (0-based, exclusive end) and replace."""
+        if line_to <= line_from:
+            return
+        line_from = max(line_from, 0)
+        line_to = min(line_to, self.lines())
+        if line_to <= line_from:
+            return
+        end_line = line_to - 1
+        # Select only the line contents; the end line's line end stays
+        # untouched, so the replacement cannot consume or shift it.
+        end_column = len(self.text(end_line).rstrip("\r\n"))
+        self.setSelection(line_from, 0, end_line, end_column)
         lines = self.text_to_list(self.selectedText())
         for i in range(len(lines)):
             lines[i] = transform_func(lines[i])
         self.replaceSelectedText(self.list_to_text(lines))
-        self.setSelection(line_from, 0, line_to, len(self.text(line_to)) - 1)
+        end_column = len(self.text(end_line).rstrip("\r\n"))
+        self.setSelection(line_from, 0, end_line, end_column)
 
-    def set_lines(self, line_from, line_to, list_of_strings):
+    def set_lines(
+        self, line_from: int, line_to: int, list_of_strings: list[str]
+    ) -> None:
         """
         Set the text of multiple lines in one operation.
+        line_from/line_to are 0-based with an exclusive line_to.
         """
+        if line_to - line_from != len(list_of_strings):
+            raise Exception("Ranges of assignment don't match!")
         strings_iter = iter(list_of_strings)
-        self._transform_lines(line_from + 1, line_to + 1, lambda _: next(strings_iter))
-        self.setCursorPosition(line_to, 0)
+        self._transform_lines(line_from, line_to, lambda _: next(strings_iter))
+        if line_to > line_from:
+            self.setCursorPosition(line_to - 1, 0)
 
     def set_all_text(self, text):
         """
@@ -711,16 +816,18 @@ class CustomEditor(BaseEditor):
     def get_line(self, line_number):
         """Return the text of the selected line in the scintilla document"""
         line_text = self.text(line_number - 1)
-        return line_text.replace("\n", "")
+        return line_text.rstrip("\r\n")
 
-    def get_lines(self, line_from=None, line_to=None):
-        """Return the text of the entire scintilla document as a list of lines"""
-        # Check if boundaries are valid
-        if line_from == None or line_to == None:
-            return self.line_list
-        else:
-            # Slice up the line_list list according to the boundaries
-            return self.line_list[line_from:line_to]
+    def get_lines(
+        self, line_from: int | None = None, line_to: int | None = None
+    ) -> list[str]:
+        """Return the text of the lines [line_from, line_to)
+        (0-based, exclusive end), or the whole document as a list of lines"""
+        if line_from is None:
+            line_from = 0
+        if line_to is None:
+            line_to = len(self.line_list) if self.line_list else 0
+        return list(self.line_list[line_from:line_to]) if self.line_list else []
 
     def get_absolute_cursor_position(self):
         """
@@ -777,7 +884,7 @@ class CustomEditor(BaseEditor):
         # Check if the appending text is valid
         if appending_text != "" and appending_text != None:
             self._transform_lines(
-                line_from, line_to, lambda line: line + appending_text
+                line_from - 1, line_to, lambda line: line + appending_text
             )
 
     def prepend_to_line(self, append_text, line_number):
@@ -826,11 +933,11 @@ class CustomEditor(BaseEditor):
         # Check if the appending text is valid
         if prepending_text != "" and prepending_text != None:
             self._transform_lines(
-                line_from, line_to, lambda line: prepending_text + line
+                line_from - 1, line_to, lambda line: prepending_text + line
             )
 
     def _comment_lines_internal(self, line_from, line_to):
-        """Comment lines [line_from, line_to) according to the currently set lexer."""
+        """Comment lines line_from..line_to (1-based, inclusive) according to the currently set lexer."""
         if self.lexer().open_close_comment_style == True:
             self.prepend_to_lines(self.lexer().comment_string, line_from, line_to)
             self.append_to_lines(self.lexer().end_comment_string, line_from, line_to)
@@ -849,7 +956,7 @@ class CustomEditor(BaseEditor):
         if line_from == line_to:
             return
         self._comment_lines_internal(line_from, line_to)
-        line_to_length = len(self.line_list[line_to])
+        line_to_length = len(self.line_list[line_to - 1])
         self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
 
     def _uncomment_line_text(self, line_text):
@@ -878,11 +985,11 @@ class CustomEditor(BaseEditor):
         """Uncomment lines according to the currently set lexer"""
         if line_from == line_to:
             return
-        selected_lines = self.line_list[line_from:line_to]
+        selected_lines = self.line_list[line_from - 1 : line_to]
         for i in range(len(selected_lines)):
             selected_lines[i] = self._uncomment_line_text(selected_lines[i])
-        self.line_list[line_from:line_to] = selected_lines
-        line_to_length = len(self.line_list[line_to])
+        self.line_list[line_from - 1 : line_to] = selected_lines
+        line_to_length = len(self.line_list[line_to - 1])
         self.setSelection(line_to - 1, line_to_length, line_from - 1, 0)
 
     def indent_lines_to_cursor(self):
@@ -897,22 +1004,19 @@ class CustomEditor(BaseEditor):
         indent_space = cursor_position[1] * " "
         # Test if indenting one or many lines
         if self.getSelection() == (-1, -1, -1, -1):
-            line_number = cursor_position[0] + 1
+            line_number = cursor_position[0]
             line = self.line_list[line_number].lstrip()
             self.line_list[line_number] = indent_space + line
         else:
-            # Get the cursor index in the current line and selected lines
-            start_line_number = self.getSelection()[0] + 1
-            end_line_number = self.getSelection()[2] + 1
+            # Get the first and last selected line (0-based, inclusive)
+            start_line_number = self.getSelection()[0]
+            end_line_number = self.getSelection()[2]
             # Get the lines text as a list
             indented_lines = []
-            line_list = self.get_lines(start_line_number, end_line_number)
+            line_list = self.get_lines(start_line_number, end_line_number + 1)
             for i in range(len(line_list)):
                 line = line_list[i].lstrip()
                 indented_lines.append(indent_space + line)
-            # Adjust the line numbers to standard(0..lines()) numbering
-            start_line_number -= 1
-            end_line_number -= 1
             # Select the text from the lines
             if end_line_number == (self.lines() - 1):
                 # The last selected line is at the end of the document,
@@ -953,8 +1057,6 @@ class CustomEditor(BaseEditor):
             selection[0] == selection[2] and selection[1] == selection[3]
         ):
             line_number, position = self.getCursorPosition()
-            # Adjust index to the line list indexing
-            line_number += 1
             # Check if the indentation is the first function
             # that is exected in an empty editor
             if len(self.line_list) == 0:
@@ -970,7 +1072,7 @@ class CustomEditor(BaseEditor):
                         adding_text = diff * " "
                         new_line = adding_text + line_text
                         self.line_list[line_number] = new_line
-                        self.setCursorPosition(line_number - 1, i + diff)
+                        self.setCursorPosition(line_number, i + diff)
                         break
                 else:
                     # No text in the current line
@@ -978,23 +1080,25 @@ class CustomEditor(BaseEditor):
                     adding_text = diff * " "
                     new_line = line_text[:position] + adding_text + line_text[position:]
                     self.line_list[line_number] = new_line
-                    self.setCursorPosition(line_number - 1, len(new_line))
+                    self.setCursorPosition(line_number, len(new_line))
             else:
                 # There is text before the cursor
                 diff = tab_width - (position % tab_width)
                 adding_text = diff * " "
                 new_line = line_text[:position] + adding_text + line_text[position:]
                 self.line_list[line_number] = new_line
-                self.setCursorPosition(line_number - 1, position + diff)
+                self.setCursorPosition(line_number, position + diff)
         else:
-            # MULTILINE INDENT
+            # MULTILINE INDENT - indent all visually selected lines regardless of end column
             selected_line = self.getCursorPosition()[0]
-            # Adjust the 'from' and 'to' indexes to the line list indexing
-            line_from = selection[0] + 1
-            line_to = selection[2] + 1
-            # This part is to mimic the default indent functionality of Scintilla
+            # The slice bounds are 0-based with an exclusive end
+            line_from = selection[0]
+            # selection[3] is the end column; if 0, selection ends at start of next line
+            # so the last selected line is selection[2] - 1
             if selection[3] == 0:
                 line_to = selection[2]
+            else:
+                line_to = selection[2] + 1
             # Get the selected line list
             lines = self.line_list[line_from:line_to]
             # Set the indentation width
@@ -1002,7 +1106,7 @@ class CustomEditor(BaseEditor):
 
             # Smart indentation that tabs to tab-width columns
             def indent_func(line):
-                if line.strip() != " ":
+                if line.strip() != "":
                     if line.startswith(" "):
                         leading_spaces = len(line) - len(line.lstrip())
                         diff = tab_width - (leading_spaces % tab_width)
@@ -1054,8 +1158,6 @@ class CustomEditor(BaseEditor):
         selection = self.getSelection()
         if selection == (-1, -1, -1, -1):
             line_number, position = self.getCursorPosition()
-            # Adjust index to the line list indexing
-            line_number += 1
             line_text = self.line_list[line_number]
             if line_text == "":
                 return
@@ -1066,7 +1168,7 @@ class CustomEditor(BaseEditor):
                     diff = tab_width
                 new_length = len(line_text) - diff
                 self.line_list[line_number] = self.line_list[line_number][:new_length]
-                self.setCursorPosition(line_number - 1, new_length)
+                self.setCursorPosition(line_number, new_length)
             else:
                 if line_text[0] != " ":
                     # Do not indent, just move the cursor back
@@ -1075,7 +1177,7 @@ class CustomEditor(BaseEditor):
                     diff = position % tab_width
                     if diff == 0:
                         diff = tab_width
-                    self.setCursorPosition(line_number - 1, position - diff)
+                    self.setCursorPosition(line_number, position - diff)
                 elif line_text[:position].strip() == "":
                     # The line has spaces in the beginning
                     for i, ch in enumerate(line_text):
@@ -1086,31 +1188,28 @@ class CustomEditor(BaseEditor):
                             self.line_list[line_number] = self.line_list[line_number][
                                 diff:
                             ]
-                            self.setCursorPosition(line_number - 1, i - diff)
+                            self.setCursorPosition(line_number, i - diff)
                             break
                 else:
                     # Move the cursor to the first none space character then repeat above code
                     diff = position % tab_width
                     if diff == 0:
                         diff = tab_width
-                    self.setCursorPosition(line_number - 1, position - diff)
+                    self.setCursorPosition(line_number, position - diff)
         else:
-            # MULTILINE UNINDENT
+            # MULTILINE UNINDENT - unindent all visually selected lines regardless of end column
             selected_line = self.getCursorPosition()[0]
-            # Adjust the 'from' and 'to' indexes to the line list indexing
-            line_from = selection[0] + 1
-            line_to = selection[2] + 1
-            # This part is to mimic the default indent functionality of Scintilla
+            # The slice bounds are 0-based with an exclusive end
+            line_from = selection[0]
+            # selection[3] is the end column; if 0, selection ends at start of next line
+            # so the last selected line is selection[2] - 1
             if selection[3] == 0:
                 line_to = selection[2]
+            else:
+                line_to = selection[2] + 1
             # Get the selected line list
             lines = self.line_list[line_from:line_to]
 
-            ## Remove the leading tab-width number of spaces in every line
-            ## for i in range(0, len(lines)):
-            ##     for j in range(0, tab_width):
-            ##         if lines[i].startswith(" "):
-            ##             lines[i] = lines[i].replace(" ", "", 1)
             # Smart unindentation that unindents each line to the nearest tab column
             def unindent_func(line):
                 if line.startswith(" "):
@@ -1128,7 +1227,6 @@ class CustomEditor(BaseEditor):
             self.line_list[line_from:line_to] = lines
             # Set the selection again according to which line was selected before the indent
             if selected_line == selection[0]:
-                # This part is also to mimic the default indent functionality of Scintilla
                 if selection[3] == 0:
                     select_from = selection[2]
                 else:
@@ -1138,9 +1236,8 @@ class CustomEditor(BaseEditor):
                 select_to_length = 0
             else:
                 select_from = selection[0]
-                select_to = selection[2]
                 select_from_length = 0
-                # This part is also to mimic the default indent functionality of Scintilla
+                select_to = selection[2]
                 if selection[3] == 0:
                     select_to = selection[2]
                 else:
@@ -1150,27 +1247,13 @@ class CustomEditor(BaseEditor):
                 select_from, select_from_length, select_to, select_to_length
             )
 
-    def text_to_list(self, input_text):
-        """Split the input text into a list of lines according to the document EOL delimiter"""
-        out_list = []
-        if self.eolMode() == qt.QsciScintilla.EolMode.EolUnix:
-            out_list = input_text.split("\n")
-        elif self.eolMode() == qt.QsciScintilla.EolMode.EolWindows:
-            out_list = input_text.split("\r\n")
-        elif self.eolMode() == qt.QsciScintilla.EolMode.EolMac:
-            out_list = input_text.split("\r")
-        return out_list
+    def text_to_list(self, input_text: str) -> list[str]:
+        """Split the input text into a list of lines on any line-end form"""
+        return components.linelist.split_lines(input_text)
 
-    def list_to_text(self, line_list):
-        """Convert a list of lines to one string according to the document EOL delimiter"""
-        out_text = ""
-        if self.eolMode() == qt.QsciScintilla.EolMode.EolUnix:
-            out_text = "\n".join(line_list)
-        elif self.eolMode() == qt.QsciScintilla.EolMode.EolWindows:
-            out_text = "\r\n".join(line_list)
-        elif self.eolMode() == qt.QsciScintilla.EolMode.EolMac:
-            out_text = "\r".join(line_list)
-        return out_text
+    def list_to_text(self, line_list: list[str]) -> str:
+        """Convert a list of lines to one string joined with LF"""
+        return "\n".join(line_list)
 
     def toggle_comment_uncomment(self):
         """Toggle commenting for the selected lines"""
@@ -1243,8 +1326,9 @@ class CustomEditor(BaseEditor):
         else:
             # Selected text, apply function to the selected lines only
             try:
-                # Get the starting and end line
-                start_line_number = self.getSelection()[0] + 1
+                # Get the starting and end line as 0-based bounds with an
+                # exclusive end
+                start_line_number = self.getSelection()[0]
                 end_line_number = self.getSelection()[2] + 1
                 # Apply the function to the lines
                 new_line_list = []
@@ -1875,10 +1959,15 @@ class CustomEditor(BaseEditor):
         self.name = os.path.basename(self.save_path)
         # Change the displayed name of the tab in the basic widget
         self._parent.set_tab_name(self, self.name)
-        # Check if a line ending was specified
+        # Determine the line ending to write the file with. The buffer itself
+        # always holds LF, so this is the only place where the file's own form
+        # is applied.
         if line_ending == None:
-            # Write contents of the tab into the specified file
-            save_result = functions.write_to_file(self.text(), self.save_path, encoding)
+            target_eol = self._target_eol
+            if target_eol == None:
+                target_eol = components.linelist.eol_string(
+                    int(settings.get("editor")["end_of_line_mode"])
+                )
         else:
             # The line ending has to be a string
             if isinstance(line_ending, str) == False:
@@ -1887,13 +1976,14 @@ class CustomEditor(BaseEditor):
                     message_type=constants.MessageType.ERROR,
                 )
                 return False
-            else:
-                # Convert the text into a list and join it together with the specified line ending
-                text_list = self.line_list
-                converted_text = line_ending.join(text_list)
-                save_result = functions.write_to_file(
-                    converted_text, self.save_path, encoding
-                )
+            target_eol = line_ending
+        # Remember the choice for the next save of this document
+        self._target_eol = target_eol
+        # Normalize the buffer and convert it to the target line endings
+        file_text = self._normalize_line_endings(self.text())
+        if target_eol != "\n":
+            file_text = file_text.replace("\n", target_eol)
+        save_result = functions.write_to_file(file_text, self.save_path, encoding)
 
         # Check save result
         if save_result == True:
@@ -1997,7 +2087,9 @@ class CustomEditor(BaseEditor):
         # Set the theme
         self.set_theme(settings.get_theme())
         # Update corner icons
-        self.internals.update_corner_button_icon(self.current_icon)
+        self.internals.update_corner_button_icon(
+            self.current_icon, index=self._lexer_button_index
+        )
         self.internals.update_icon(self)
         # Check for special lexer functionality
         qt.QTimer.singleShot(10, self.__check_special_lexer_functionality)
@@ -2079,6 +2171,21 @@ class CustomEditor(BaseEditor):
         """Normalize CRLF/CR line endings to LF for content comparison."""
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
+    def update_target_eol(self, file_with_path: str) -> None:
+        """Set the line ending used when this document is written to disk from
+        the file's actual line endings.
+
+        A file without any line ends keeps the current choice; with no previous
+        choice either the "end_of_line_mode" setting is used as the fallback.
+        """
+        detected = functions.detect_file_eol(file_with_path)
+        if detected != None:
+            self._target_eol = detected
+        elif self._target_eol == None:
+            self._target_eol = components.linelist.eol_string(
+                int(settings.get("editor")["end_of_line_mode"])
+            )
+
     def _apply_reload_diff(self, new_text: str) -> None:
         """Apply only the changed hunks of new_text to the document.
 
@@ -2131,6 +2238,10 @@ class CustomEditor(BaseEditor):
         if disk_file_text is None:
             self.main_form.display.write_to_statusbar("Error reading file!", 3000)
             return
+        # Pick up the file's line endings first, so even a change that only
+        # touches line endings (nothing to reload below) is remembered for the
+        # next save.
+        self.update_target_eol(self.save_path)
         # If the disk content is identical to the editor content there is
         # nothing to reload (this also covers reloads triggered by our own
         # save, and avoids destroying the undo history for no reason).
@@ -2193,6 +2304,7 @@ class CustomEditor(BaseEditor):
         lexer_copy = self.lexer().__class__(new_editor)
         new_editor.set_lexer(lexer_copy, self.current_file_type)
         new_editor.setText(self.text())
+        new_editor._target_eol = self._target_eol
 
     def toggle_wordwrap(self):
         """
@@ -2295,14 +2407,12 @@ class CustomEditor(BaseEditor):
     def _correct_autocompletion(self, *args):
         word, from_index, to_index, length = args
         word = word.decode("utf-8")
-        current_line = self.getCursorPosition()[0] + 1
+        current_line = self.getCursorPosition()[0]
         line = self.line_list[current_line]
         for token in self.splitter.findall(self.text()):
             if token.lower() == word.lower():
                 self.line_list[current_line] = token.join(line.rsplit(word, 1))
-                self.setCursorPosition(
-                    current_line - 1, len(self.line_list[current_line])
-                )
+                self.setCursorPosition(current_line, len(self.line_list[current_line]))
                 break
 
     def autocompletion_disable(self):

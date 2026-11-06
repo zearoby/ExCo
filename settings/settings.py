@@ -17,7 +17,7 @@ import copy
 import threading
 import traceback
 from collections import UserDict
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import data
 import filefunctions
@@ -244,31 +244,24 @@ class SettingsManipulator:
         if data.platform == "Windows":
             new_file = new_file.replace("\\", "/")
 
+        max_count = self.get("max-number-of-recent-files")
         current_list = self.get("recent_files").copy()
 
-        # Check recent files list length
-        while len(current_list) > self.get("max-number-of-recent-files"):
-            # The recent files list is to long
+        # Trim the list down to the maximum allowed length
+        while len(current_list) > max_count:
             current_list.pop(0)
-        # Check if he new file is already in the list
-        if new_file in self.get("recent_files"):
-            # Check if the file is already at the top
-            if current_list.index(new_file) == (
-                self.get("max-number-of-recent-files") - 1
-            ):
-                return
-            # Remove the old file with the same name as the new file from the list
-            try:
-                while True:
-                    pop_index = current_list.index(new_file)
-                    current_list.pop(pop_index)
-            except ValueError:
-                pass
-            # Add the new file to the end of the list
-            current_list.append(new_file)
-        else:
-            # The new file is not in the list, append it to the end of the list
-            current_list.append(new_file)
+
+        # The file is already at the top, nothing changes
+        if current_list and current_list[-1] == new_file:
+            return
+
+        # Remove every existing occurrence, then push the file to the top
+        while new_file in current_list:
+            current_list.remove(new_file)
+        current_list.append(new_file)
+        # Keep the list within the maximum length after the append
+        while len(current_list) > max_count:
+            current_list.pop(0)
 
         self.set("recent_files", current_list)
 
@@ -341,14 +334,24 @@ class Sessions:
     def get_sessions(self) -> dict:
         return self.__sessions
 
-    def create_empty_session(self, name="", chain=[], layout=""):
+    def create_empty_session(self, name="", chain=None, layout=""):
+        if chain is None:
+            chain = []
         return {
             "name": name,
             "chain": chain,
             "layout": layout,
         }
 
-    def create_empty_session_group(self, name="", chain=[], groups={}, sessions={}):
+    def create_empty_session_group(
+        self, name="", chain=None, groups=None, sessions=None
+    ):
+        if chain is None:
+            chain = []
+        if groups is None:
+            groups = {}
+        if sessions is None:
+            sessions = {}
         return {"name": name, "chain": chain, "groups": groups, "sessions": sessions}
 
     def add_session(
@@ -435,39 +438,58 @@ class Sessions:
         # Sort the stored sessions
         self.__sessions = sorted_sessions
 
-    def get_session(self, name, chain):
+    def get_session(self, name: str, chain: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Look up a stored session by name and ancestor group chain.
+
+        Returns None when a group in the chain is missing or when the group
+        holds no session of that name.
+        """
+        group = self.get_group(chain)
+        if group is None:
+            return None
+        return group["sessions"].get(name)
+
+    def get_group(self, chain: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Look up a stored group by its ancestor group chain.
+
+        Returns None when any group in the chain is missing, instead of
+        raising KeyError out of a Qt slot.
+        """
         # Update sessions
         self.__parent.load_settings()
 
-        session = None
-        group = self.__sessions["main"]
+        group = self.__sessions.get("main")
+        if group is None:
+            return None
         for c in chain:
-            group = group["groups"][c]
-        if name in group["sessions"].keys():
-            session = group["sessions"][name]
-        return session
-
-    def get_group(self, chain):
-        # Update sessions
-        self.__parent.load_settings()
-
-        group = self.__sessions["main"]
-        for c in chain:
-            group = group["groups"][c]
+            group = group["groups"].get(c)
+            if group is None:
+                return None
         return group
 
-    def rename_group(self, group, new_group_name):
-        def rename_first_group(grp, new_name, in_level):
-            if in_level < len(grp["chain"]):
-                return
-            grp["chain"][in_level] = new_name
-            for k, v in grp["groups"].items():
-                rename_first_group(v, new_name, in_level)
-            for k, v in grp["sessions"].items():
-                v["chain"][in_level] = new_name
+    def rename_group(self, group: Dict[str, Any], new_group_name: str) -> None:
+        """
+        Rename a group and rewrite the ancestor chains of all its descendants.
 
-        level = len(group["chain"]) - 1
-        rename_first_group(group, new_group_name, level)
+        A group is never a member of its own chain: the chain holds the
+        ancestor groups only. The group's own name therefore sits at index
+        len(group["chain"]) of every descendant chain, while the group
+        itself is shorter than that index and has to be left alone.
+        """
+
+        def rewrite_chain(grp: Dict[str, Any], new_name: str, in_level: int) -> None:
+            if in_level < len(grp["chain"]):
+                grp["chain"][in_level] = new_name
+            for child_group in grp["groups"].values():
+                rewrite_chain(child_group, new_name, in_level)
+            for session in grp["sessions"].values():
+                if in_level < len(session["chain"]):
+                    session["chain"][in_level] = new_name
+
+        level = len(group["chain"])
+        rewrite_chain(group, new_group_name, level)
         group["name"] = new_group_name
 
 
@@ -689,6 +711,27 @@ class SettingsStorage(UserDict):
             )
             raise KeyError(f"'{key}' not found in settings.")
 
+    def _deep_merge(self, base: dict, overlay: dict) -> dict:
+        """
+        Recursively merge *overlay* into *base*, returning the result.
+
+        Keys present in *overlay* overwrite those in *base*. When both values are
+        dicts, they are merged recursively rather than replaced, so that new
+        keys added to a default nested dict (e.g. a new keyboard shortcut) are
+        preserved even when the user's saved settings predate them.
+        """
+        result = dict(base)
+        for key, value in overlay.items():
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
     def update(self, other=None, _initial_load=False, **kwargs) -> None:
         """
         Overrides the update method to save settings only if the data truly changes.
@@ -715,10 +758,12 @@ class SettingsStorage(UserDict):
                     and isinstance(self.data[key], dict)
                     and isinstance(value, dict)
                 ):
-                    self.data[key].update(value)
-                    _changed = True
-                    if key not in changed_keys:
-                        changed_keys.append(key)
+                    merged = self._deep_merge(self.data[key], value)
+                    if merged != self.data[key]:
+                        self.data[key] = merged
+                        _changed = True
+                        if key not in changed_keys:
+                            changed_keys.append(key)
                 else:
                     _set_item_and_check_change(key, value)
 
@@ -728,10 +773,12 @@ class SettingsStorage(UserDict):
                 and isinstance(self.data[key], dict)
                 and isinstance(value, dict)
             ):
-                self.data[key].update(value)
-                _changed = True
-                if key not in changed_keys:
-                    changed_keys.append(key)
+                merged = self._deep_merge(self.data[key], value)
+                if merged != self.data[key]:
+                    self.data[key] = merged
+                    _changed = True
+                    if key not in changed_keys:
+                        changed_keys.append(key)
             else:
                 _set_item_and_check_change(key, value)
 

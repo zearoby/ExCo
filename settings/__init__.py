@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict
 import qt
 import themes
 
-from settings.settings import SettingsManipulator
+from settings.settings import SettingsManipulator, Sessions
 
 __settings_manipulator: SettingsManipulator = SettingsManipulator()
 __theme_cache: Dict[str, Dict[str, Any]] = {}
@@ -43,7 +43,7 @@ def get_theme() -> dict:
     return __theme_cache[theme_name]
 
 
-def get_sessions() -> dict:
+def get_sessions() -> Sessions:
     return __settings_manipulator.sessions
 
 
@@ -63,6 +63,28 @@ def get_editor_font():
         __settings_manipulator.get("current_editor_font_name"),
         int(__settings_manipulator.get("current_editor_font_size")),
     )
+
+
+def get_menu_font() -> qt.QFont:
+    """
+    The font for every menu surface (menubar titles, menus, context menus).
+
+    `custom_menu_font` is stored as `(family, size[, weight])`. An empty or
+    `None` family means "inherit the application family" while still applying
+    the custom size, mirroring the terminal font behaviour. With no custom
+    font at all, the application font is used.
+    """
+    custom = __settings_manipulator.get("custom_menu_font")
+    if not custom:
+        return get_current_font()
+    font = get_current_font()
+    family, size = custom[0], int(custom[1])
+    if family:
+        font.setFamily(str(family))
+    font.setPointSize(size)
+    if len(custom) > 2 and custom[2] is not None:
+        font.setWeight(int(custom[2]))
+    return font
 
 
 # --- API Definition ---
